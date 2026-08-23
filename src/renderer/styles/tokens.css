@@ -1,0 +1,90 @@
+/**
+ * BiblePortal design tokens.
+ *
+ * A live console is used in a dark room for hours, often under stress. The
+ * palette is therefore low-luminance with a single saturated accent reserved
+ * for state that matters (what is on air), and destructive/live actions get a
+ * colour nothing else is allowed to use.
+ */
+
+:root {
+  /* Surfaces — deepest at the back, lifting toward the operator */
+  --bg-void: #05070f;
+  --bg-app: #090c16;
+  --bg-panel: #0e1220;
+  --bg-raised: #141a2c;
+  --bg-hover: #1a2135;
+  --bg-active: #212a42;
+  --bg-input: #0b0f1c;
+
+  /* Lines */
+  --line: #1e2740;
+  --line-soft: #161d30;
+  --line-strong: #2c3856;
+
+  /* Text */
+  --text: #e8ecf7;
+  --text-dim: #9aa6c4;
+  --text-faint: #66738f;
+  --text-inverse: #0a0d18;
+
+  /* Accent — interactive, focus, selection */
+  --accent: #5b7cfa;
+  --accent-bright: #7d97ff;
+  --accent-dim: #3a53b8;
+  --accent-wash: rgba(91, 124, 250, 0.14);
+  --accent-line: rgba(91, 124, 250, 0.42);
+
+  /* Live/program red — reserved exclusively for "this is on air" */
+  --live: #ff3b48;
+  --live-bright: #ff6670;
+  --live-wash: rgba(255, 59, 72, 0.14);
+  --live-line: rgba(255, 59, 72, 0.45);
+
+  /* Preview green — staged, not yet live */
+  --preview: #22c55e;
+  --preview-wash: rgba(34, 197, 94, 0.13);
+  --preview-line: rgba(34, 197, 94, 0.4);
+
+  --warn: #f5a524;
+  --warn-wash: rgba(245, 165, 36, 0.14);
+  --danger: #f43f5e;
+
+  /* Type */
+  --font-ui: 'Inter var', 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+  --font-serif: 'Iowan Old Style', 'Palatino Linotype', 'Source Serif 4', Georgia, serif;
+  --font-mono: ui-monospace, 'SF Mono', 'JetBrains Mono', 'Cascadia Code', Menlo, monospace;
+
+  --fs-xs: 10.5px;
+  --fs-sm: 11.5px;
+  --fs-base: 13px;
+  --fs-md: 14px;
+  --fs-lg: 16px;
+  --fs-xl: 20px;
+
+  /* Space */
+  --sp-1: 4px;
+  --sp-2: 6px;
+  --sp-3: 8px;
+  --sp-4: 12px;
+  --sp-5: 16px;
+  --sp-6: 22px;
+  --sp-7: 30px;
+
+  --radius-sm: 5px;
+  --radius: 8px;
+  --radius-lg: 12px;
+  --radius-xl: 16px;
+
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow: 0 4px 16px rgba(0, 0, 0, 0.45);
+  --shadow-lg: 0 18px 50px rgba(0, 0, 0, 0.62);
+
+  --ease: cubic-bezier(0.32, 0.72, 0, 1);
+  --fast: 120ms var(--ease);
+  --normal: 200ms var(--ease);
+
+  --rail-w: 62px;
+  --titlebar-h: 40px;
+  --statusbar-h: 30px;
+}

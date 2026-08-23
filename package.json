@@ -1,0 +1,136 @@
+{
+  "name": "bibleportal",
+  "productName": "BiblePortal Studio",
+  "version": "1.0.0",
+  "description": "BiblePortal Studio \u2014 a fully offline, professional church presentation and live scripture console with on-device AI.",
+  "main": "electron/main.cjs",
+  "license": "GPL-3.0-or-later",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=18.18"
+  },
+  "scripts": {
+    "postinstall": "node scripts/sync-ort.mjs && node scripts/fetch-data.mjs --if-missing",
+    "data": "node scripts/fetch-data.mjs",
+    "dev": "concurrently -k -n VITE,ELECTRON -c cyan,magenta \"vite\" \"npm:dev:electron\"",
+    "dev:electron": "wait-on tcp:5273 && cross-env BP_DEV=1 ELECTRON_RUN_AS_NODE= electron .",
+    "build": "node scripts/sync-ort.mjs && vite build",
+    "start": "npm run build && bash scripts/stop.sh && cross-env-shell ELECTRON_RUN_AS_NODE= electron .",
+    "typecheck": "tsc --noEmit",
+    "verify": "node scripts/verify.mjs",
+    "test": "npm run typecheck && npm run verify && npm run build",
+    "dist:mac": "npm run build && npm run dist:prepare && electron-builder --mac --arm64",
+    "dist:win": "npm run build && npm run dist:prepare && electron-builder --win --x64",
+    "dist:linux": "npm run build && electron-builder --linux",
+    "smoke": "cross-env-shell ELECTRON_RUN_AS_NODE= electron scripts/smoke.cjs",
+    "data:all": "node scripts/fetch-data.mjs --all",
+    "sync:ort": "node scripts/sync-ort.mjs",
+    "smoke:asr": "cross-env-shell ELECTRON_RUN_AS_NODE= electron scripts/asr-smoke.cjs",
+    "stop": "bash scripts/stop.sh",
+    "bench:asr": "cross-env-shell ELECTRON_RUN_AS_NODE= electron scripts/asr-bench.cjs",
+    "dist:prepare": "node scripts/prepare-dist.mjs",
+    "dist:all": "npm run build && npm run dist:prepare && electron-builder --mac --arm64 --win --x64",
+    "icons": "cross-env-shell ELECTRON_RUN_AS_NODE= electron scripts/build-icons.cjs"
+  },
+  "dependencies": {
+    "jszip": "^3.10.1",
+    "sql.js": "^1.14.2",
+    "yauzl": "^3.4.0"
+  },
+  "devDependencies": {
+    "@huggingface/transformers": "^3.8.1",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "@vitejs/plugin-react": "^4.3.4",
+    "concurrently": "^9.1.0",
+    "cross-env": "^7.0.3",
+    "electron": "^33.3.0",
+    "electron-builder": "^25.1.8",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "typescript": "^5.7.2",
+    "vite": "^6.0.7",
+    "wait-on": "^8.0.1",
+    "zustand": "^5.0.2"
+  },
+  "build": {
+    "appId": "app.bibleportal.studio",
+    "productName": "BiblePortal Studio",
+    "directories": {
+      "buildResources": "assets",
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "!dist/assets/ort-wasm*.wasm",
+      "electron/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "resources/data-dist",
+        "to": "data-pack/data"
+      },
+      {
+        "from": "resources/lexicon",
+        "to": "data-pack/lexicon"
+      }
+    ],
+    "mac": {
+      "category": "public.app-category.productivity",
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "arm64"
+          ]
+        },
+        {
+          "target": "zip",
+          "arch": [
+            "arm64"
+          ]
+        }
+      ],
+      "hardenedRuntime": true,
+      "extendInfo": {
+        "NSMicrophoneUsageDescription": "BiblePortal uses the microphone for on-device live scripture detection. Audio never leaves this computer.",
+        "NSLocalNetworkUsageDescription": "BiblePortal uses the local network only to serve the stage/remote display to devices you connect."
+      },
+      "identity": null,
+      "notarize": false,
+      "icon": "assets/icon.icns"
+    },
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "zip",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": "always"
+    },
+    "linux": {
+      "target": [
+        "AppImage",
+        "deb"
+      ],
+      "category": "AudioVideo"
+    },
+    "artifactName": "${productName}-${version}-${os}-${arch}.${ext}",
+    "compression": "maximum"
+  }
+}

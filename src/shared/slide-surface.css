@@ -1,0 +1,154 @@
+/* Styles for SlideSurface — shared by console preview, output and stage. */
+
+.slide-host {
+  position: relative;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  background: #000;
+}
+
+.slide-surface {
+  position: relative;
+  flex: none;
+  overflow: hidden;
+  transition: opacity 140ms ease;
+  /* Sized to its container; no transform, so no oversized raster layer. */
+  aspect-ratio: 16 / 9;
+  max-width: 100%;
+  max-height: 100%;
+}
+
+.slide-blackout {
+  position: absolute;
+  inset: 0;
+  background: #000;
+  z-index: 10;
+}
+
+.slide-frame {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 44px;
+}
+
+.slide-body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.14em;
+  animation: slide-in 320ms cubic-bezier(0.32, 0.72, 0, 1);
+}
+
+.slide-line { display: block; }
+
+.slide-versenum {
+  font-size: 0.42em;
+  font-weight: 700;
+  opacity: 0.62;
+  margin-right: 0.28em;
+  vertical-align: super;
+  line-height: 0;
+}
+
+.slide-caption {
+  flex: none;
+  animation: slide-in 320ms cubic-bezier(0.32, 0.72, 0, 1) 60ms backwards;
+}
+
+.slide-logo {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+}
+
+.slide-logo-mark {
+  font-size: 220px;
+  color: rgba(255, 255, 255, 0.16);
+  line-height: 1;
+}
+
+@keyframes slide-in {
+  from { opacity: 0; transform: translateY(14px); }
+  to { opacity: 1; transform: none; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .slide-body, .slide-caption { animation: none; }
+}
+
+/* Media fills the surface behind the text layer. Scaled with the rest of the
+   1920x1080 stage, so the console preview matches the projector exactly. */
+.slide-media {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  z-index: 0;
+}
+
+.slide-frame { z-index: 2; }
+.slide-logo { z-index: 2; }
+
+/* Shown only when the host never reported a size — a blank surface with no
+   explanation is indistinguishable from a broken app. */
+.slide-unmeasured {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  display: grid;
+  place-items: center;
+  padding: 8px;
+  color: #f5a524;
+  font-family: system-ui, sans-serif;
+  font-size: 11px;
+  text-align: center;
+}
+
+/* ------------------------------------------------ sermon outline mode */
+
+.slide-outline {
+  display: flex;
+  flex-direction: column;
+  gap: 0.42em;
+  animation: slide-in 320ms cubic-bezier(0.32, 0.72, 0, 1);
+}
+
+.outline-entry {
+  display: grid;
+  grid-template-columns: 1.6em 1fr;
+  gap: 0.4em;
+  /* Points not being preached recede rather than disappear — the audience
+     keeps the shape of the message without being distracted from the live one. */
+  opacity: 0.36;
+  font-size: 0.62em;
+  line-height: 1.3;
+  transition: opacity 260ms ease, font-size 260ms ease;
+}
+
+.outline-entry.active {
+  opacity: 1;
+  font-size: 1em;
+  font-weight: 700;
+}
+
+.outline-marker { opacity: 0.55; font-variant-numeric: tabular-nums; }
+.outline-text { display: block; }
+
+.outline-subs {
+  grid-column: 2;
+  margin-top: 0.3em;
+  display: flex;
+  flex-direction: column;
+  gap: 0.18em;
+  font-weight: 400;
+  opacity: 0.82;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .outline-entry { transition: none; }
+}

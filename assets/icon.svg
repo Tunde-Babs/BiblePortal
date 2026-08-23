@@ -1,0 +1,84 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <!--
+    BiblePortal app icon.
+
+    An open book with light rising from its pages: scripture, projected. The
+    mark is built from four large shapes so it survives being drawn at 16px in
+    the Dock, where anything finer turns to mud.
+
+    Geometry follows the macOS convention — a squircle inset from the canvas
+    edge, not a circle and not a full-bleed square, so it sits correctly beside
+    other apps. Palette matches the console's own theme.
+  -->
+  <defs>
+    <linearGradient id="bg" x1="0.15" y1="0" x2="0.75" y2="1">
+      <stop offset="0%"   stop-color="#232e56"/>
+      <stop offset="48%"  stop-color="#141b36"/>
+      <stop offset="100%" stop-color="#080c1a"/>
+    </linearGradient>
+
+    <radialGradient id="sheen" cx="0.3" cy="0.14" r="0.8">
+      <stop offset="0%"   stop-color="#7d97ff" stop-opacity="0.30"/>
+      <stop offset="100%" stop-color="#7d97ff" stop-opacity="0"/>
+    </radialGradient>
+
+    <!-- Light leaving the pages: bright at the spine, gone by the top. -->
+    <linearGradient id="ray" x1="0.5" y1="1" x2="0.5" y2="0">
+      <stop offset="0%"   stop-color="#ffffff" stop-opacity="1"/>
+      <stop offset="35%"  stop-color="#cfdcff" stop-opacity="0.70"/>
+      <stop offset="100%" stop-color="#7d97ff" stop-opacity="0"/>
+    </linearGradient>
+
+    <linearGradient id="pageL" x1="0.1" y1="0" x2="0.9" y2="0.7">
+      <stop offset="0%"   stop-color="#ffffff"/>
+      <stop offset="100%" stop-color="#b9c8ee"/>
+    </linearGradient>
+    <linearGradient id="pageR" x1="0.9" y1="0" x2="0.1" y2="0.7">
+      <stop offset="0%"   stop-color="#ffffff"/>
+      <stop offset="100%" stop-color="#b9c8ee"/>
+    </linearGradient>
+
+    <filter id="soft" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur stdDeviation="7"/>
+    </filter>
+
+    <!-- macOS squircle: inset from the canvas, generous corner radius. -->
+    <clipPath id="shape">
+      <rect x="76" y="76" width="872" height="872" rx="196" ry="196"/>
+    </clipPath>
+  </defs>
+
+  <g clip-path="url(#shape)">
+    <rect x="76" y="76" width="872" height="872" fill="url(#bg)"/>
+    <rect x="76" y="76" width="872" height="872" fill="url(#sheen)"/>
+
+    <!-- Three rays fanning from the spine. Blurred so they read as light. -->
+    <g filter="url(#soft)">
+      <path d="M512 566 L470 214 L554 214 Z" fill="url(#ray)"/>
+      <path d="M512 566 L360 268 L424 232 Z" fill="url(#ray)" opacity="0.72"/>
+      <path d="M512 566 L664 268 L600 232 Z" fill="url(#ray)" opacity="0.72"/>
+      <path d="M512 566 L268 372 L312 320 Z" fill="url(#ray)" opacity="0.42"/>
+      <path d="M512 566 L756 372 L712 320 Z" fill="url(#ray)" opacity="0.42"/>
+    </g>
+
+    <!-- Open book. Covers are set slightly behind the pages for depth. -->
+    <g>
+      <path d="M512 586 C438 532 344 512 246 520 L246 700 C344 692 438 712 512 764 Z"
+            fill="#5f74b8" opacity="0.55"/>
+      <path d="M512 586 C586 532 680 512 778 520 L778 700 C680 692 586 712 512 764 Z"
+            fill="#5f74b8" opacity="0.55"/>
+
+      <path d="M512 566 C440 514 350 494 256 502 L256 676 C350 668 440 688 512 742 Z"
+            fill="url(#pageL)"/>
+      <path d="M512 566 C584 514 674 494 768 502 L768 676 C674 668 584 688 512 742 Z"
+            fill="url(#pageR)"/>
+
+      <!-- Spine, holding the two halves together. -->
+      <path d="M512 566 V742" stroke="#7286c2" stroke-width="14" stroke-linecap="round" opacity="0.75"/>
+    </g>
+
+    <!-- Edge catch-light, the way macOS icons pick up the bezel. -->
+    <rect x="78" y="78" width="868" height="868" rx="194" ry="194"
+          fill="none" stroke="#9db4ff" stroke-width="4" opacity="0.18"/>
+  </g>
+</svg>
