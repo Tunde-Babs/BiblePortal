@@ -34,6 +34,14 @@ const DEFAULTS = {
     versesPerSlide: 2,
     showVerseNumbers: true,
     showTranslationAbbr: true,
+    /**
+     * Section labels ("Verse 3", "Chorus") on the audience screen. Off by
+     * default: they orient the operator, but the congregation is reading the
+     * words, not the structure. Scripture references are governed separately —
+     * those must keep showing, and for a licensed translation the abbreviation
+     * is a condition of the publisher's permission.
+     */
+    showSectionLabels: false,
     blankOnStart: true,
     clearBetweenItems: false,
   },
@@ -53,6 +61,18 @@ const DEFAULTS = {
     localModelOnly: true,
   },
   displays: { outputScreenId: null, stageScreenId: null },
+  /**
+   * Licensed translations reached through API.Bible under the user's own key.
+   * The key lives here, in the user's settings file — never in the repository.
+   */
+  online: {
+    enabled: false,
+    apiKey: '',
+    endpoint: '',
+    cache: true,
+    /** Translation ids the operator has chosen to show in the picker. */
+    bibles: [],
+  },
   /**
    * Background media per content type. Churches almost always want a different
    * look behind scripture than behind lyrics, so these are set independently

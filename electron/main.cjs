@@ -24,6 +24,7 @@ const { CollectionService } = require('./services/collections.cjs');
 const { EasyWorshipImportService } = require('./services/easyworship-import.cjs');
 const { PresentationService } = require('./services/presentations.cjs');
 const { SermonService } = require('./services/sermon.cjs');
+const { OnlineBibleService } = require('./services/online-bible.cjs');
 const { LiveState } = require('./live-state.cjs');
 const { WindowManager, isDev } = require('./windows.cjs');
 const { EVENTS } = require('./ipc-channels.cjs');
@@ -87,6 +88,7 @@ async function bootstrap() {
   ctx.ew = new EasyWorshipImportService({ songs: ctx.songs, media: ctx.media, plans: ctx.plans });
   ctx.presentations = new PresentationService({ store: ctx.store, mediaDir: path.join(userData, 'media') });
   ctx.sermons = new SermonService(ctx.store);
+  ctx.online = new OnlineBibleService({ settings: ctx.settings, cacheDir: path.join(userData, 'cache') });
   await ctx.schedules.ensureDirs().catch(() => {});
   ctx.ai = new AIService({ bible: ctx.bible, settings: ctx.settings });
   ctx.live = new LiveState();
@@ -184,6 +186,10 @@ function registerHandlers() {
   });
   handle('songs:markUsed', async (id) => ({ ok: true, song: await ctx.songs.markUsed(id) }));
   handle('songs:stats', async () => ({ ok: true, ...(await ctx.songs.stats()) }));
+  handle('songs:splitStanzas', async (text, opts) => ({
+    ok: true,
+    sections: songFormat.splitStanzas(text, opts),
+  }));
   handle('songs:slides', async (id, opts) => ({ ok: true, slides: await ctx.songs.slides(id, opts) }));
   handle('songs:importText', async (text, name) => ({ ok: true, song: await ctx.songs.importText(text, name) }));
   handle('songs:pickFiles', async () => {
@@ -340,8 +346,11 @@ function registerHandlers() {
   handle('settings:get', async () => ({ ok: true, settings: await ctx.settings.get() }));
   handle('settings:patch', async (patch) => {
     const settings = await ctx.settings.patch(patch);
-    // A theme change must reach the audience screen without a take.
-    ctx.live.set({ theme: await ctx.settings.activeTheme() });
+    // Theme and label changes must reach the audience screen without a take.
+    ctx.live.set({
+      theme: await ctx.settings.activeTheme(),
+      sectionLabels: settings.presentation.showSectionLabels,
+    });
     return { ok: true, settings };
   });
   handle('settings:reset', async () => ({ ok: true, settings: await ctx.settings.reset() }));
@@ -349,7 +358,11 @@ function registerHandlers() {
   handle('themes:active', async () => ({ ok: true, theme: await ctx.settings.activeTheme() }));
   handle('themes:save', async (theme) => {
     const saved = await ctx.settings.saveTheme(theme);
-    ctx.live.set({ theme: await ctx.settings.activeTheme() });
+    const startupSettings = await ctx.settings.get();
+  ctx.live.set({
+    theme: await ctx.settings.activeTheme(),
+    sectionLabels: startupSettings.presentation.showSectionLabels,
+  });
     return { ok: true, theme: saved };
   });
   handle('themes:delete', (id) => ctx.settings.deleteTheme(id));
@@ -361,6 +374,7 @@ function registerHandlers() {
   handle('live:step', async (delta) => ({ ok: true, moved: ctx.live.step(delta), state: ctx.live.get() }));
   handle('live:stepPreview', async (delta) => ({ ok: true, moved: ctx.live.stepPreview(delta), state: ctx.live.get() }));
   handle('live:goTo', async (i) => ({ ok: true, moved: ctx.live.goTo(i), state: ctx.live.get() }));
+  handle('live:goToPreview', async (i) => ({ ok: true, moved: ctx.live.goToPreview(i), state: ctx.live.get() }));
   handle('live:blackout', async () => ({ ok: true, state: ctx.live.toggleBlackout() }));
   handle('live:clear', async () => ({ ok: true, state: ctx.live.clear() }));
   handle('live:restore', async () => ({ ok: true, state: ctx.live.restore() }));
@@ -433,6 +447,51 @@ function registerHandlers() {
   handle('sermons:removePoint', (id, pointId) => ctx.sermons.removePoint(id, pointId));
   handle('sermons:movePoint', async (id, from, to) => ({ ok: true, points: await ctx.sermons.movePoint(id, from, to) }));
   handle('sermons:slides', async (id, opts) => ({ ok: true, slides: await ctx.sermons.slides(id, opts) }));
+
+  // ------------------------------------------- licensed (online) translations
+  /**
+   * Config for the UI, with the key itself withheld — the renderer never needs
+   * to see it, only whether one is set.
+   */
+  handle('online:config', async () => {
+    const c = await ctx.online.config();
+    return {
+      ok: true,
+      enabled: c.enabled,
+      hasKey: !!c.key,
+      endpoint: c.endpoint,
+      cache: c.cache,
+      bibles: c.bibles,
+    };
+  });
+
+  handle('online:setKey', async (key, endpoint) => {
+    await ctx.settings.patch({
+      online: {
+        apiKey: String(key ?? '').trim(),
+        endpoint: String(endpoint ?? '').trim(),
+        enabled: !!String(key ?? '').trim(),
+      },
+    });
+    ctx.online.catalogue = null; // a new key may reach a different set
+    return { ok: true };
+  });
+
+  handle('online:toggle', async (enabled) => {
+    await ctx.settings.patch({ online: { enabled: !!enabled } });
+    return { ok: true, enabled: !!enabled };
+  });
+
+  handle('online:test', async () => ctx.online.test());
+  handle('online:bibles', async (refresh) => ({ ok: true, bibles: await ctx.online.bibles({ refresh }) }));
+  handle('online:selectBibles', async (ids) => {
+    await ctx.settings.patch({ online: { bibles: Array.isArray(ids) ? ids : [] } });
+    return { ok: true, bibles: ids };
+  });
+  handle('online:lookup', (bibleId, ref) => ctx.online.lookup(bibleId, ref));
+  handle('online:cacheSize', async () => ({ ok: true, ...(await ctx.online.cacheSize()) }));
+  handle('online:diagnose', (bibleId, ref) => ctx.online.diagnose(bibleId, ref));
+  handle('online:clearCache', () => ctx.online.clearCache());
 
   // ------------------------------------------------------ EasyWorship import
   handle('ew:pickFile', async () => {
@@ -692,7 +751,11 @@ app.whenReady().then(async () => {
   registerShortcuts();
 
   // Seed live state with the active theme so the first take looks right.
-  ctx.live.set({ theme: await ctx.settings.activeTheme() });
+  const startupSettings = await ctx.settings.get();
+  ctx.live.set({
+    theme: await ctx.settings.activeTheme(),
+    sectionLabels: startupSettings.presentation.showSectionLabels,
+  });
 
   ctx.windows.createConsole();
 

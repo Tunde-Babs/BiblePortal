@@ -8,7 +8,8 @@
 
 import type {
   Book, Deck, Detection, LiveStateShape, MediaItem, Plan, PlanItem, Settings,
-  Slide, Song, StrongsEntry, Theme, TranslationInfo, CatalogueGroup, Verse, Reference,
+  Slide, Song, SongSection, StrongsEntry, Theme, TranslationInfo, CatalogueGroup,
+  Verse, Reference,
 } from './types';
 
 const bridge = () => {
@@ -102,6 +103,9 @@ export const api = {
     slides: (id: string, opts?: Record<string, unknown>) =>
       call<{ slides: Slide[] }>(() => bridge().songs.slides(id as never, opts as never)).then((r) => r.slides),
     pickFiles: () => call<{ paths: string[] }>(() => bridge().songs.pickFiles()),
+    splitStanzas: (text: string, opts?: { startVerse?: number }) =>
+      call<{ sections: SongSection[] }>(() => bridge().songs.splitStanzas(text as never, opts as never))
+        .then((r) => r.sections),
     import: (paths: string[], collectionName?: string) =>
       call<{ imported: number; failed: number; results: unknown[] }>(
         () => bridge().songs.import(paths as never, collectionName as never)),
@@ -176,6 +180,8 @@ export const api = {
     step: (delta: number) => call<{ moved: boolean; state: LiveStateShape }>(() => bridge().live.step(delta as never)),
     stepPreview: (delta: number) => call<{ moved: boolean; state: LiveStateShape }>(() => bridge().live.stepPreview(delta as never)),
     goTo: (i: number) => call<{ moved: boolean; state: LiveStateShape }>(() => bridge().live.goTo(i as never)),
+    goToPreview: (i: number) =>
+      call<{ moved: boolean; state: LiveStateShape }>(() => bridge().live.goToPreview(i as never)),
     blackout: () => call<{ state: LiveStateShape }>(() => bridge().live.blackout()).then((r) => r.state),
     clear: () => call<{ state: LiveStateShape }>(() => bridge().live.clear()).then((r) => r.state),
     restore: () => call<{ state: LiveStateShape }>(() => bridge().live.restore()).then((r) => r.state),
@@ -247,6 +253,24 @@ export const api = {
       call<{ slides: Slide[] }>(() => bridge().sermons.slides(id as never, opts as never)).then((r) => r.slides),
   },
 
+  // ------------------------------------------ licensed (online) translations
+  online: {
+    config: () => call<OnlineConfig>(() => bridge().online.config()),
+    setKey: (key: string, endpoint?: string) =>
+      call(() => bridge().online.setKey(key as never, endpoint as never)),
+    toggle: (enabled: boolean) => call<{ enabled: boolean }>(() => bridge().online.toggle(enabled as never)),
+    test: () => call<{ count: number; sample: string[] }>(() => bridge().online.test()),
+    bibles: (refresh?: boolean) =>
+      call<{ bibles: OnlineBible[] }>(() => bridge().online.bibles(refresh as never)).then((r) => r.bibles),
+    selectBibles: (ids: string[]) => call(() => bridge().online.selectBibles(ids as never)),
+    lookup: (bibleId: string, ref: string) =>
+      call<OnlineLookup>(() => bridge().online.lookup(bibleId as never, ref as never)),
+    cacheSize: () => call<{ passages: number; bytes: number }>(() => bridge().online.cacheSize()),
+    diagnose: (bibleId: string, ref?: string) =>
+      call<OnlineDiagnosis>(() => bridge().online.diagnose(bibleId as never, ref as never)),
+    clearCache: () => call<{ removed: number }>(() => bridge().online.clearCache()),
+  },
+
   // ---------------------------------------------------- EasyWorship import
   ew: {
     pickFile: () => call<{ paths: string[] }>(() => bridge().ew.pickFile()),
@@ -310,6 +334,54 @@ export interface Sermon {
   points: SermonPoint[];
   createdAt: string;
   updatedAt: string;
+}
+
+export interface OnlineConfig {
+  enabled: boolean;
+  /** Whether a key is stored. The key itself never reaches the renderer. */
+  hasKey: boolean;
+  endpoint: string;
+  cache: boolean;
+  bibles: string[];
+}
+
+export interface OnlineBible {
+  id: string;
+  abbr: string;
+  name: string;
+  language: string;
+  description: string;
+  copyright: string;
+  licensed: true;
+  online: true;
+}
+
+export interface OnlineDiagnosis {
+  bibleId: string;
+  reference: string;
+  abbr: string;
+  cached: boolean;
+  /** Structure only — never the text of a licensed translation. */
+  shape: {
+    fields: string[];
+    contentChars: number;
+    markerStyle: string;
+    versesParsed: number;
+    verseNumbers: number[];
+    hasCopyright: boolean;
+  } | null;
+  verseLengths: number[];
+}
+
+export interface OnlineLookup {
+  online: true;
+  label: string;
+  translation: string;
+  translationName: string;
+  translationAbbr: string;
+  copyright: string;
+  cached?: boolean;
+  verses: Verse[];
 }
 
 export interface EwInspection {

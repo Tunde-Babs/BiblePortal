@@ -15,7 +15,7 @@ if a process is left behind.
 ## Before you push
 
 ```bash
-npm test             # typecheck + 268 unit checks + production build
+npm test             # typecheck + 293 unit checks + production build
 npm run smoke        # boots the app and drives the live pipeline
 npm run smoke:asr    # speech model load, local ONNX, detection
 ```
@@ -36,6 +36,11 @@ This is the one rule with legal weight, and it is deliberate:
 - **Media** — no backgrounds or loops are bundled. Users add their own.
 
 `scripts/verify.mjs` asserts every catalogue entry is public domain. Keep it that way.
+
+- **API keys** — the API.Bible connector reads a key from the user's settings.
+  It must never be committed, logged, put in an error message, or used in a
+  cache filename. `redact()` in `services/online-bible.cjs` exists for this;
+  there is a test asserting the key cannot leak into a cache path.
 
 ## Layout
 

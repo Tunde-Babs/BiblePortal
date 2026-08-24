@@ -9,7 +9,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
-import { api, type SmartResult, type Suggestion } from '../../shared/api';
+import { api, type SmartResult, type Suggestion, type OnlineBible } from '../../shared/api';
 import type { Verse } from '../../shared/types';
 import { scriptureDeck, useApp } from '../stores/app';
 import { IconSearch } from '../components/Icons';
@@ -41,6 +41,9 @@ export function BiblePanel() {
   const [busy, setBusy] = useState(false);
   const [selected, setSelected] = useState<string | null>(null);
   const [suggestions, setSuggestions] = useState<Suggestion[]>([]);
+  /** Licensed translations the operator has enabled, shown alongside bundled ones. */
+  const [online, setOnline] = useState<OnlineBible[]>([]);
+  const [copyright, setCopyright] = useState('');
   const [highlight, setHighlight] = useState(0);
   const [showSuggestions, setShowSuggestions] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -49,6 +52,23 @@ export function BiblePanel() {
   const versesPerSlide = settings?.presentation.versesPerSlide ?? 2;
 
   useEffect(() => { inputRef.current?.focus(); }, []);
+
+  // Load whichever licensed translations are switched on.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const cfg = await api.online.config();
+        if (!cfg.enabled || !cfg.bibles.length) { if (!cancelled) setOnline([]); return; }
+        const all = await api.online.bibles();
+        if (!cancelled) setOnline(all.filter((b) => cfg.bibles.includes(b.id)));
+      } catch { if (!cancelled) setOnline([]); }
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
+  /** A licensed translation is fetched, not read from disk. */
+  const isOnline = online.some((b) => b.id === activeTranslation);
 
   // Book-name completions. A partial name like "Jo" is the commonest thing
   // typed and is not a full-text query, so it gets its own lookup.
@@ -73,21 +93,45 @@ export function BiblePanel() {
     inputRef.current?.focus();
   }, []);
 
-  // Debounced smart search — short enough to feel live, long enough not to
-  // re-query on every keystroke of a long reference.
+  // Debounced search. A bundled translation goes through the offline engine; a
+  // licensed one is fetched under the user's own key, so only references are
+  // supported there — full-text search over a licensed text is not ours to do.
   useEffect(() => {
     const q = query.trim();
-    if (!q) { setResult(null); return; }
+    if (!q) { setResult(null); setCopyright(''); return; }
     let cancelled = false;
     setBusy(true);
+
     const id = setTimeout(() => {
-      api.bible.smart(q, { translation: activeTranslation, limit: 80 })
+      const run = isOnline
+        ? api.online.lookup(activeTranslation, q).then((hit) => {
+            setCopyright(hit.copyright ?? '');
+            return {
+              kind: 'reference' as const,
+              query: q,
+              ok: true,
+              reference: hit.verses[0]
+                ? { bookId: hit.verses[0].bookId, book: hit.verses[0].book ?? '', chapter: hit.verses[0].chapter,
+                    verse: hit.verses[0].verse, endChapter: hit.verses[0].chapter, endVerse: hit.verses[0].verse }
+                : null,
+              label: hit.label,
+              translation: hit.translation,
+              translationName: hit.translationName,
+              translationAbbr: hit.translationAbbr,
+              verses: hit.verses,
+            } as unknown as SmartResult;
+          })
+        : api.bible.smart(q, { translation: activeTranslation, limit: 80 })
+            .then((res) => { setCopyright(''); return res; });
+
+      run
         .then((res) => { if (!cancelled) setResult(res); })
-        .catch((err: Error) => { if (!cancelled) toast(err.message, 'error'); })
+        .catch((err: Error) => { if (!cancelled) { toast(err.message, 'error'); setResult(null); } })
         .finally(() => { if (!cancelled) setBusy(false); });
-    }, 180);
+    }, isOnline ? 420 : 180);
+
     return () => { cancelled = true; clearTimeout(id); };
-  }, [query, activeTranslation, toast]);
+  }, [query, activeTranslation, isOnline, toast]);
 
   /** Stage a passage (whole reference result, or one verse from a text search). */
   const stage = useCallback(async (label: string, verses: Verse[], abbr: string, take = false) => {
@@ -124,9 +168,18 @@ export function BiblePanel() {
           onChange={(e) => setTranslation(e.target.value)}
           aria-label="Translation"
         >
-          {translations.map((t) => (
-            <option key={t.id} value={t.id}>{t.abbr} — {t.name}</option>
-          ))}
+          <optgroup label="Installed">
+            {translations.map((t) => (
+              <option key={t.id} value={t.id}>{t.abbr} — {t.name}</option>
+            ))}
+          </optgroup>
+          {online.length > 0 && (
+            <optgroup label="Licensed (online)">
+              {online.map((b) => (
+                <option key={b.id} value={b.id}>{b.abbr} — {b.name}</option>
+              ))}
+            </optgroup>
+          )}
         </select>
       </div>
 
@@ -202,6 +255,15 @@ export function BiblePanel() {
           </ul>
         )}
       </div>
+
+      {isOnline && (
+        <div className="panel-toolbar" style={{ paddingTop: 4, paddingBottom: 4 }}>
+          <span className="chip warn">licensed · online</span>
+          <span className="faint truncate" style={{ fontSize: 'var(--fs-xs)' }}>
+            {copyright || 'Fetched under your API.Bible key. References only — no full-text search.'}
+          </span>
+        </div>
+      )}
 
       {header && (
         <div className="panel-toolbar" style={{ paddingTop: 6, paddingBottom: 6 }}>

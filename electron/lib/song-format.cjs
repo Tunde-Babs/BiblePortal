@@ -244,6 +244,65 @@ function parsePlainText(text) {
 // ------------------------------------------------------------------ dispatch
 
 /**
+ * Split pasted text into stanzas.
+ *
+ * A blank line is the separator — that is how people actually type and copy
+ * songs, and how every other presentation program reads them. A line that is
+ * only a section name ("Chorus", "Verse 2") labels the block that follows
+ * rather than becoming a line of it.
+ *
+ * Unlike `parsePlainText`, nothing is treated as a title: this is used from the
+ * editor, where the title has its own field and a first line is real content.
+ *
+ * @param {string} text
+ * @param {{startVerse?:number}} opts  number to continue verse labelling from
+ * @returns {{id:string,type:string,number:number|null,label:string,body:string}[]}
+ */
+function splitStanzas(text, opts = {}) {
+  const blocks = String(text ?? '')
+    .replace(/\r\n?/g, '\n')
+    .split(/\n\s*\n+/)
+    .map((b) => b.replace(/[ \t]+$/gm, '').trim())
+    .filter(Boolean);
+
+  const sections = [];
+  let verse = opts.startVerse ?? 0;
+
+  for (const block of blocks) {
+    const lines = block.split('\n');
+    const header = /^\[?\s*((?:pre-?chorus|chorus|verse|bridge|intro|outro|tag|ending|refrain|interlude|vamp)\s*\d*)\s*\]?\s*:?\s*$/i
+      .exec(lines[0] ?? '');
+
+    let label;
+    let body;
+    if (header && lines.length > 1) {
+      const meta = parseSectionLabel(header[1]);
+      label = meta.label;
+      body = lines.slice(1).join('\n').trim();
+      // Keep auto-numbering ahead of any number the paste already used, so a
+      // later unlabelled block cannot reuse it.
+      if (meta.type === 'verse' && meta.number != null) verse = Math.max(verse, meta.number);
+    } else {
+      verse += 1;
+      label = `Verse ${verse}`;
+      body = block;
+    }
+    if (!body) continue;
+
+    const meta = parseSectionLabel(label);
+    sections.push({
+      id: `s_${Math.random().toString(36).slice(2, 10)}`,
+      type: meta.type,
+      number: meta.type === 'verse' ? verse : null,
+      label,
+      body,
+    });
+  }
+
+  return sections;
+}
+
+/**
  * Import a song from file contents, choosing the parser by shape then filename.
  * @param {string} content
  * @param {string} filename
@@ -330,5 +389,5 @@ function toSlides(song, { maxLines = 4, arrangement = null, includeChords = fals
 
 module.exports = {
   SECTION_TYPES, parseSectionLabel, parseChordPro, parseOpenLyrics,
-  parsePlainText, importSong, exportChordPro, toSlides,
+  parsePlainText, splitStanzas, importSong, exportChordPro, toSlides,
 };

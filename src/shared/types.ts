@@ -223,6 +223,7 @@ export interface LiveStateShape {
   blackout: boolean;
   cleared: boolean;
   theme: Theme | null;
+  sectionLabels: boolean;
   logo: boolean;
   alert: { text: string; style: string; at: number } | null;
   countdown: { endsAt: number; label: string } | null;
@@ -242,6 +243,7 @@ export interface Settings {
     versesPerSlide: number;
     showVerseNumbers: boolean;
     showTranslationAbbr: boolean;
+    showSectionLabels: boolean;
     blankOnStart: boolean;
     clearBetweenItems: boolean;
   };
@@ -261,6 +263,13 @@ export interface Settings {
     localModelOnly: boolean;
   };
   displays: { outputScreenId: string | null; stageScreenId: string | null };
+  online: {
+    enabled: boolean;
+    apiKey: string;
+    endpoint: string;
+    cache: boolean;
+    bibles: string[];
+  };
   backgrounds: {
     default: string | null;
     scripture: string | null;
@@ -318,6 +327,7 @@ declare global {
       ew: Record<string, (...args: never[]) => Promise<never>>;
       presentations: Record<string, (...args: never[]) => Promise<never>>;
       sermons: Record<string, (...args: never[]) => Promise<never>>;
+      online: Record<string, (...args: never[]) => Promise<never>>;
       app: Record<string, (...args: never[]) => Promise<never>>;
       on: (event: string, handler: (payload: never) => void) => () => void;
       EVENTS: Record<string, string>;

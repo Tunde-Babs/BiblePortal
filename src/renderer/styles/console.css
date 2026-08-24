@@ -813,3 +813,144 @@ input[type="range"]:disabled { opacity: 0.45; }
   background: var(--bg-void);
   flex: none;
 }
+
+/* --------------------------------- stanza list: inline editing + selection */
+
+.stanza-tools {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding-bottom: var(--sp-2);
+  border-bottom: 1px solid var(--line-soft);
+  margin-bottom: var(--sp-2);
+}
+
+.stanza-paste {
+  padding: var(--sp-3);
+  margin-bottom: var(--sp-2);
+  border: 1px solid var(--accent-line);
+  border-radius: var(--radius-sm);
+  background: var(--accent-wash);
+}
+.stanza-paste .textarea { font-family: var(--font-serif); font-size: 13px; }
+
+/* Multi-selected rows for a bulk paste — distinct from the active row. */
+.stanza-row.picked {
+  border-color: var(--accent);
+  box-shadow: inset 0 0 0 1px var(--accent-line);
+}
+
+/* The label is editable in place, so it reads as text until touched. */
+.stanza-label-input {
+  width: 100%;
+  padding: 1px 3px;
+  margin: -1px -3px 2px;
+  border: 1px solid transparent;
+  border-radius: 3px;
+  background: transparent;
+  color: var(--text);
+  font-family: inherit;
+  font-size: var(--fs-sm);
+  font-weight: 650;
+}
+.stanza-label-input:hover { border-color: var(--line); }
+.stanza-label-input:focus {
+  border-color: var(--accent);
+  background: var(--bg-input);
+  outline: none;
+}
+
+.stanza-preview { cursor: text; }
+.stanza-preview:hover { color: var(--text-dim); }
+
+.stanza-inline {
+  width: 100%;
+  padding: var(--sp-2);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-sm);
+  background: var(--bg-input);
+  color: var(--text);
+  font-family: var(--font-serif);
+  font-size: 13px;
+  line-height: 1.5;
+  resize: vertical;
+}
+.stanza-inline:focus { outline: none; box-shadow: 0 0 0 3px var(--accent-wash); }
+
+/* ----------------------------------------------------------- slide strip */
+
+.slide-strip {
+  flex: none;
+  padding: 0 var(--sp-4) var(--sp-3);
+  min-height: 0;
+}
+
+.slide-strip-head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-3);
+  margin-bottom: var(--sp-2);
+}
+
+.slide-strip-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 190px;
+  padding-right: 2px;
+}
+
+.slide-chip {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp-2);
+  width: 100%;
+  padding: var(--sp-2) var(--sp-3);
+  border: 1px solid var(--line-soft);
+  border-left: 3px solid transparent;
+  border-radius: var(--radius-sm);
+  background: var(--bg-raised);
+  color: var(--text-dim);
+  text-align: left;
+  cursor: pointer;
+  transition: background var(--fast), border-color var(--fast);
+}
+.slide-chip:hover { background: var(--bg-hover); color: var(--text); }
+
+/* Staged in preview — green, matching the preview deck's own border. */
+.slide-chip.staged {
+  border-left-color: var(--preview);
+  background: var(--preview-wash);
+  color: var(--text);
+}
+
+/* On the audience screen right now — red, and it wins over staged. */
+.slide-chip.live {
+  border-left-color: var(--live);
+  background: var(--live-wash);
+  color: var(--text);
+}
+
+.slide-chip-num { width: 16px; flex: none; font-size: var(--fs-xs); color: var(--text-faint); }
+.slide-chip-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+
+.slide-chip-label {
+  font-size: var(--fs-xs);
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--accent-bright);
+}
+.slide-chip.live .slide-chip-label { color: var(--live-bright); }
+
+.slide-chip-text { font-size: var(--fs-sm); line-height: 1.4; }
+
+.slide-chip-tally {
+  width: 6px;
+  height: 6px;
+  flex: none;
+  margin-top: 5px;
+  border-radius: 50%;
+  background: var(--live);
+  box-shadow: 0 0 6px var(--live);
+}

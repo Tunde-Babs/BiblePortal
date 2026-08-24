@@ -26,6 +26,8 @@ class LiveState extends EventEmitter {
       /** Clear hides content but keeps the background — used between items. */
       cleared: false,
       theme: null,
+      /** Mirrors settings.presentation.showSectionLabels for the output windows. */
+      sectionLabels: false,
       logo: false,
       alert: null,
       countdown: null,
@@ -67,6 +69,14 @@ class LiveState extends EventEmitter {
     const deck = this.state.program;
     if (index < 0 || index >= deck.slides.length) return false;
     this.set({ program: { ...deck, index } });
+    return true;
+  }
+
+  /** Jump preview to a specific slide, so the operator can cue any part. */
+  goToPreview(index) {
+    const deck = this.state.preview;
+    if (index < 0 || index >= deck.slides.length) return false;
+    this.set({ preview: { ...deck, index } });
     return true;
   }
 

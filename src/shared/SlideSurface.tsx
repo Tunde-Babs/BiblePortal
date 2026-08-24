@@ -24,6 +24,12 @@ interface Props {
   cleared?: boolean;
   logo?: boolean;
   showTranslation?: boolean;
+  /**
+   * Show a song's section label on screen. Scripture references ignore this —
+   * they are governed by the theme, and a licensed translation's abbreviation
+   * must always appear.
+   */
+  showSectionLabel?: boolean;
   /** Render verse numbers as superscripts before each line. */
   showVerseNumbers?: boolean;
   className?: string;
@@ -33,7 +39,8 @@ interface Props {
 
 export function SlideSurface({
   slide, deck, theme, blackout = false, cleared = false, logo = false,
-  showTranslation = true, showVerseNumbers = false, className = '', fill = true,
+  showTranslation = true, showSectionLabel = true, showVerseNumbers = false,
+  className = '', fill = true,
 }: Props) {
   const hostRef = useRef<HTMLDivElement>(null);
   const [scale, setScale] = useState(0);
@@ -84,7 +91,12 @@ export function SlideSurface({
     return () => { cancelAnimationFrame(raf); ro.disconnect(); };
   }, []);
 
-  const caption = captionOf(slide, deck, showTranslation);
+  const rawCaption = captionOf(slide, deck, showTranslation);
+  // Song decks copy the section label into `caption`, so the label cannot be
+  // told from a scripture reference by inspecting the slide — the deck kind is
+  // the reliable discriminator.
+  const isSectionLabel = deck?.kind === 'song';
+  const caption = isSectionLabel && !showSectionLabel ? '' : rawCaption;
   const hasContent = !!slide && !cleared && !blackout;
 
   // Media belongs to the surface, not to one window. Rendering it only in the

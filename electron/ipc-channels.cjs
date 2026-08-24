@@ -11,7 +11,7 @@ const INVOKE = [
   // songs
   'songs:all', 'songs:get', 'songs:search', 'songs:upsert', 'songs:remove',
   'songs:import', 'songs:importText', 'songs:export', 'songs:slides',
-  'songs:markUsed', 'songs:stats', 'songs:pickFiles',
+  'songs:markUsed', 'songs:stats', 'songs:pickFiles', 'songs:splitStanzas',
   // plans
   'plans:all', 'plans:get', 'plans:create', 'plans:update', 'plans:remove',
   'plans:duplicate', 'plans:addItem', 'plans:updateItem', 'plans:removeItem', 'plans:reorder',
@@ -26,7 +26,7 @@ const INVOKE = [
   'settings:get', 'settings:patch', 'settings:reset',
   'themes:all', 'themes:save', 'themes:delete', 'themes:active',
   // live
-  'live:get', 'live:preview', 'live:take', 'live:step', 'live:goTo', 'live:stepPreview',
+  'live:get', 'live:preview', 'live:take', 'live:step', 'live:goTo', 'live:goToPreview', 'live:stepPreview',
   'live:blackout', 'live:clear', 'live:restore', 'live:logo', 'live:alert', 'live:set',
   // displays
   'displays:list', 'displays:open', 'displays:close', 'displays:status',
@@ -41,6 +41,10 @@ const INVOKE = [
   'sermons:all', 'sermons:get', 'sermons:create', 'sermons:update', 'sermons:remove',
   'sermons:duplicate', 'sermons:addPoint', 'sermons:updatePoint', 'sermons:removePoint',
   'sermons:movePoint', 'sermons:slides',
+  // licensed translations via API.Bible
+  'online:config', 'online:setKey', 'online:test', 'online:bibles',
+  'online:lookup', 'online:toggle', 'online:selectBibles',
+  'online:cacheSize', 'online:clearCache', 'online:diagnose',
   // EasyWorship migration
   'ew:pickFile', 'ew:pickFolder', 'ew:inspect', 'ew:importSchedule', 'ew:importFolder',
   // app

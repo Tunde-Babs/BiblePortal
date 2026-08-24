@@ -40,6 +40,7 @@ const easyworship = require('../electron/lib/easyworship.cjs');
 const pptx = require('../electron/lib/pptx.cjs');
 const zipStream = require('../electron/lib/zip-stream.cjs');
 const { SermonService } = require('../electron/services/sermon.cjs');
+const { OnlineBibleService } = require('../electron/services/online-bible.cjs');
 const { MAX_RESIDENT_TRANSLATIONS, MAX_RESIDENT_INDEXES } = require('../electron/services/bible.cjs');
 const { AIService } = require('../electron/services/ai.cjs');
 const { LiveState } = require('../electron/live-state.cjs');
@@ -802,6 +803,79 @@ await checkAsync('rejects a database with no Bible table', async () => {
   catch { return true; }
 });
 
+// ------------------------------------------- licensed (online) translations
+
+describe('API.Bible connector');
+check('passage ids use USFM book codes', () => {
+  const id = (q) => OnlineBibleService.passageId(reference.parseOne(q));
+  eq(id('John 3:16'), 'JHN.3.16');
+  eq(id('John 3:16-18'), 'JHN.3.16-JHN.3.18');
+  eq(id('Psalm 23'), 'PSA.23');
+  eq(id('Matthew 5:1-7:29'), 'MAT.5.1-MAT.7.29');
+});
+check('every canon id is a valid USFM code', () => {
+  // The connector builds ids straight from our canon, so a drift here would
+  // silently request passages that do not exist.
+  for (const book of canon.BOOKS) {
+    if (!/^[A-Z0-9]{3}$/.test(book.id)) throw new Error(`${book.name} -> ${book.id}`);
+  }
+});
+check('verse-numbered text splits back into verses', () => {
+  const ref = reference.parseOne('John 3:16-17');
+  const out = OnlineBibleService.splitVerses('[16] First body here. [17] Second body here.', ref);
+  eq(out.map((v) => v.verse), [16, 17]);
+  eq(out[0].text, 'First body here.');
+});
+check('text with no verse markers still yields a verse', () => {
+  const ref = reference.parseOne('John 3:16');
+  const out = OnlineBibleService.splitVerses('A block with no markers.', ref);
+  eq(out, [{ verse: 16, text: 'A block with no markers.' }]);
+});
+check('verse markers are recognised in every format seen in the wild', () => {
+  const ref = reference.parseOne('John 3:16-18');
+  const split = (t) => OnlineBibleService.splitVerses(t, ref).map((v) => v.verse);
+  eq(split('[16] Body one. [17] Body two. [18] Body three.'), [16, 17, 18]);
+  eq(split('(16) Body one. (17) Body two.'), [16, 17]);
+  eq(split('{16} Body one. {17} Body two.'), [16, 17]);
+  eq(split('Lead in 16. Body one. 17. Body two.'), [16, 17]);
+});
+check('an unparsed block is attributed to the opening verse, not dropped', () => {
+  const ref = reference.parseOne('John 3:16');
+  eq(OnlineBibleService.splitVerses('A block with no numbering.', ref), [
+    { verse: 16, text: 'A block with no numbering.' },
+  ]);
+});
+check('the shape report carries no verse text', () => {
+  const verses = [{ verse: 16, text: 'Some fetched body text' }];
+  const shape = OnlineBibleService.describeShape({ content: '[16] Some fetched body text', copyright: 'x' }, verses);
+  const dumped = JSON.stringify(shape);
+  ok(!dumped.includes('Some fetched body text'), 'licensed text leaked into diagnostics');
+  eq(shape.markerStyle, 'bracket');
+  eq(shape.verseNumbers, [16]);
+});
+
+check('empty content yields nothing rather than a blank verse', () =>
+  eq(OnlineBibleService.splitVerses('   ', reference.parseOne('John 3:16')), []));
+
+await checkAsync('a lookup without a key fails with guidance, not a stack trace', async () => {
+  const settings = new SettingsService(new Store(path.join(TMP, 'online1')));
+  const svc = new OnlineBibleService({ settings, cacheDir: path.join(TMP, 'online1-cache') });
+  try { await svc.lookup('any', 'John 3:16'); return false; }
+  catch (err) { return /Settings/.test(err.message); }
+});
+await checkAsync('online is off until a key is set', async () => {
+  const settings = new SettingsService(new Store(path.join(TMP, 'online2')));
+  const svc = new OnlineBibleService({ settings, cacheDir: path.join(TMP, 'online2-cache') });
+  eq((await svc.config()).enabled, false);
+});
+await checkAsync('the cache filename never contains the key', async () => {
+  const settings = new SettingsService(new Store(path.join(TMP, 'online3')));
+  await settings.patch({ online: { apiKey: 'FIXTURE-not-a-real-key-0000', enabled: true } });
+  const svc = new OnlineBibleService({ settings, cacheDir: path.join(TMP, 'online3-cache') });
+  const file = svc._cacheFile('bible-id', 'JHN.3.16');
+  ok(!file.includes('FIXTURE-not-a-real-key-0000'), 'the key leaked into a cache path');
+});
+
 // ------------------------------------------------------ PowerPoint import
 
 describe('PowerPoint (.pptx)');
@@ -866,6 +940,85 @@ await checkAsync('a zip with no slides explains the .ppt case', async () => {
 });
 
 // ----------------------------------------------------------- sermon notes
+
+describe('Section labels on screen');
+await checkAsync('section labels are off by default', async () => {
+  const svc = new SettingsService(new Store(path.join(TMP, 'labels1')));
+  eq((await svc.get()).presentation.showSectionLabels, false);
+});
+await checkAsync('turning labels on leaves other presentation settings alone', async () => {
+  const svc = new SettingsService(new Store(path.join(TMP, 'labels2')));
+  const next = await svc.patch({ presentation: { showSectionLabels: true } });
+  eq(next.presentation.showSectionLabels, true);
+  // Scripture attribution must not be disturbed — for a licensed translation
+  // it is a condition of the publisher's permission, not a preference.
+  eq(next.presentation.showTranslationAbbr, true);
+  eq(next.presentation.showVerseNumbers, true);
+});
+check('live state carries the flag to the output windows', () => {
+  const live = new LiveState();
+  eq(live.get().sectionLabels, false);
+  live.set({ sectionLabels: true });
+  eq(live.get().sectionLabels, true);
+});
+
+describe('Preview slide jumping');
+check('goToPreview moves only the preview deck', () => {
+  const live = new LiveState();
+  live.loadPreview({ slides: [{ id: 'a', lines: ['x'] }, { id: 'b', lines: ['y'] }, { id: 'c', lines: ['z'] }] });
+  eq(live.goToPreview(2), true);
+  eq(live.get().preview.index, 2);
+  // Cueing in preview must never disturb what is on the audience screen.
+  eq(live.get().program.slides.length, 0);
+});
+check('goToPreview refuses an index outside the deck', () => {
+  const live = new LiveState();
+  live.loadPreview({ slides: [{ id: 'a', lines: ['x'] }] });
+  eq([live.goToPreview(-1), live.goToPreview(5)], [false, false]);
+  eq(live.get().preview.index, 0);
+});
+check('cueing then taking puts that exact slide on air', () => {
+  const live = new LiveState();
+  live.loadPreview({ slides: [{ id: 'a', lines: ['x'] }, { id: 'b', lines: ['y'] }, { id: 'c', lines: ['z'] }] });
+  live.goToPreview(1);
+  live.take();
+  eq(live.get().program.index, 1);
+  eq(live.currentSlide().id, 'b');
+});
+
+describe('Pasting a song into stanzas');
+// Fixtures use neutral placeholder text; the app ships no lyrics of its own.
+check('blank lines separate stanzas', () => {
+  const out = songFormat.splitStanzas('Alpha one\nAlpha two\n\nBeta one\nBeta two\n\nGamma one');
+  eq(out.length, 3);
+  eq(out.map((x) => x.label), ['Verse 1', 'Verse 2', 'Verse 3']);
+  eq(out[0].body, 'Alpha one\nAlpha two');
+});
+check('a repeated block still becomes its own stanza', () => {
+  // Songs commonly repeat a stanza verbatim; each occurrence is addressable.
+  const out = songFormat.splitStanzas('Alpha one\nAlpha two\n\nAlpha one\nAlpha two');
+  eq(out.length, 2);
+  ok(out[0].id !== out[1].id, 'repeated blocks shared an id');
+});
+check('labelled blocks keep their label and type', () => {
+  const out = songFormat.splitStanzas('Verse 1\nAlpha\n\nChorus\nBeta\n\nGamma');
+  eq(out.map((x) => x.label), ['Verse 1', 'Chorus', 'Verse 2']);
+  eq(out.map((x) => x.type), ['verse', 'chorus', 'verse']);
+});
+check('numbering continues from stanzas already present', () => {
+  const out = songFormat.splitStanzas('Delta\n\nEpsilon', { startVerse: 2 });
+  eq(out.map((x) => x.label), ['Verse 3', 'Verse 4']);
+});
+check('windows line endings and ragged blanks are handled', () =>
+  eq(songFormat.splitStanzas('One\r\n\r\n\r\nTwo\r\n   \r\nThree').length, 3));
+check('a single block yields one stanza', () =>
+  eq(songFormat.splitStanzas('Only one block here').length, 1));
+check('empty input yields nothing', () => {
+  eq(songFormat.splitStanzas('').length, 0);
+  eq(songFormat.splitStanzas('   \n\n  \n').length, 0);
+});
+check('no stanza is created with an empty body', () =>
+  ok(songFormat.splitStanzas('Alpha\n\n\n\nBeta').every((x) => x.body.trim())));
 
 describe('Sermon notes');
 await checkAsync('a new sermon starts with a usable outline', async () => {

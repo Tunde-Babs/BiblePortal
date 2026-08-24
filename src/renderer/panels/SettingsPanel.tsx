@@ -10,7 +10,7 @@ import { useCallback, useEffect, useState } from 'react';
 
 import { api } from '../../shared/api';
 import type { CatalogueGroup, TranslationInfo } from '../../shared/types';
-import type { EwInspection } from '../../shared/api';
+import type { EwInspection, OnlineBible, OnlineConfig } from '../../shared/api';
 import { useApp } from '../stores/app';
 import { IconImport, IconTrash, IconCheck } from '../components/Icons';
 
@@ -37,11 +37,53 @@ export function SettingsPanel() {
   const [ewLook, setEwLook] = useState<EwInspection | null>(null);
   const [ewBusy, setEwBusy] = useState(false);
 
+  // Licensed translations reached under the user's own API.Bible key.
+  const [online, setOnline] = useState<OnlineConfig | null>(null);
+  const [onlineBibles, setOnlineBibles] = useState<OnlineBible[]>([]);
+  const [keyInput, setKeyInput] = useState('');
+  const [onlineBusy, setOnlineBusy] = useState(false);
+  const [cacheInfo, setCacheInfo] = useState<{ passages: number; bytes: number } | null>(null);
+
   const loadCatalogue = useCallback(async () => {
     try { setCatalogue(await api.translations.catalogue()); } catch { /* offline is fine */ }
   }, []);
 
   useEffect(() => { if (tab === 'translations') void loadCatalogue(); }, [tab, loadCatalogue]);
+
+  const loadOnline = useCallback(async () => {
+    try {
+      const cfg = await api.online.config();
+      setOnline(cfg);
+      setCacheInfo(await api.online.cacheSize().catch(() => null));
+      if (cfg.hasKey) setOnlineBibles(await api.online.bibles().catch(() => []));
+    } catch { /* not configured yet */ }
+  }, []);
+
+  useEffect(() => { if (tab === 'translations') void loadOnline(); }, [tab, loadOnline]);
+
+  /** Save the key, then immediately prove it works. */
+  const saveKey = useCallback(async () => {
+    if (!keyInput.trim()) return;
+    setOnlineBusy(true);
+    try {
+      await api.online.setKey(keyInput.trim());
+      const res = await api.online.test();
+      setKeyInput('');
+      await loadOnline();
+      toast(`Connected — ${res.count} translation(s) available to this key`, 'success');
+    } catch (err) {
+      toast(err instanceof Error ? err.message : String(err), 'error');
+    } finally { setOnlineBusy(false); }
+  }, [keyInput, loadOnline, toast]);
+
+  const toggleOnlineBible = useCallback(async (id: string) => {
+    if (!online) return;
+    const next = online.bibles.includes(id)
+      ? online.bibles.filter((b) => b !== id)
+      : [...online.bibles, id];
+    await api.online.selectBibles(next);
+    await loadOnline();
+  }, [online, loadOnline]);
   useEffect(() => { api.app.info().then((i) => setInfo(i)).catch(() => {}); }, []);
   useEffect(() => {
     const off = api.on(api.events().TRANSLATION_PROGRESS, (p: never) => setProgress(p as { id: string; percent: number }));
@@ -196,6 +238,19 @@ export function SettingsPanel() {
                   onClick={() => void patchSettings({ presentation: { showTranslationAbbr: !p.showTranslationAbbr } })}
                   aria-pressed={p.showTranslationAbbr} />
               </div>
+              <div className="switch-row">
+                <div>
+                  <div className="switch-label">Song section labels on screen</div>
+                  <div className="switch-desc">
+                    Show “Verse 2”, “Chorus” to the congregation. Off by default — the
+                    label orients you, not them. Your preview and program panes keep
+                    showing it either way.
+                  </div>
+                </div>
+                <button className={`switch ${p.showSectionLabels ? 'on' : ''}`}
+                  onClick={() => void patchSettings({ presentation: { showSectionLabels: !p.showSectionLabels } })}
+                  aria-pressed={p.showSectionLabels} />
+              </div>
             </div>
 
             <div className="settings-group">
@@ -243,6 +298,129 @@ export function SettingsPanel() {
                 <div className="row"><div className="spinner" /><span>Installing {installing}… {progress.percent}%</span></div>
               </div>
             )}
+
+            {/* ------------------------------- licensed, via the user's key */}
+            <div className="settings-group">
+              <span className="section-label">Licensed translations (online)</span>
+              <p className="field-hint" style={{ margin: 'var(--sp-3) 0' }}>
+                NIV, NLT, MSG, AMP and others can be reached through an API.Bible
+                key that your church holds. BiblePortal never ships these — your key
+                stays on this computer and is never written to the project.
+              </p>
+
+              {!online?.hasKey ? (
+                <>
+                  <div className="row">
+                    <input
+                      className="input"
+                      type="password"
+                      placeholder="Paste your API.Bible key"
+                      value={keyInput}
+                      onChange={(e) => setKeyInput(e.target.value)}
+                      onKeyDown={(e) => { if (e.key === 'Enter') void saveKey(); }}
+                      autoComplete="off"
+                      spellCheck={false}
+                    />
+                    <button className="btn primary" onClick={() => void saveKey()} disabled={onlineBusy || !keyInput.trim()}>
+                      {onlineBusy ? 'Checking…' : 'Connect'}
+                    </button>
+                  </div>
+                  <span className="field-hint">
+                    Get a key at api.bible. The free tier covers three copyrighted
+                    translations for non-commercial church use.
+                  </span>
+                </>
+              ) : (
+                <>
+                  <div className="row" style={{ marginBottom: 'var(--sp-3)' }}>
+                    <span className="chip preview"><IconCheck size={10} /> Key stored</span>
+                    <span className="faint" style={{ fontSize: 'var(--fs-xs)' }}>
+                      {onlineBibles.length} translation(s) reachable
+                    </span>
+                    <div className="panel-head-spacer" />
+                    <button
+                      className={`switch ${online.enabled ? 'on' : ''}`}
+                      onClick={async () => { await api.online.toggle(!online.enabled); await loadOnline(); }}
+                      aria-pressed={online.enabled}
+                      title={online.enabled ? 'Disable online translations' : 'Enable online translations'}
+                    />
+                  </div>
+
+                  {online.enabled && (
+                    <>
+                      <p className="field-hint" style={{ marginBottom: 'var(--sp-2)' }}>
+                        Choose which appear in the translation picker.
+                      </p>
+                      <div className="stack" style={{ maxHeight: 260, overflowY: 'auto' }}>
+                        {onlineBibles.map((b) => {
+                          const on = online.bibles.includes(b.id);
+                          return (
+                            <div key={b.id} className="card row">
+                              <div style={{ flex: 1, minWidth: 0 }}>
+                                <div className="row" style={{ gap: 'var(--sp-2)' }}>
+                                  <span className="list-title">{b.abbr}</span>
+                                  <span className="muted truncate" style={{ fontSize: 'var(--fs-sm)' }}>{b.name}</span>
+                                  <span className="chip warn">licensed</span>
+                                </div>
+                                <div className="list-sub truncate">{b.language}</div>
+                              </div>
+                              <button
+                                className="btn sm ghost"
+                                title="Fetch one passage and report how it parsed"
+                                onClick={async () => {
+                                  try {
+                                    const d = await api.online.diagnose(b.id);
+                                    toast(
+                                      `${d.abbr}: ${d.shape?.versesParsed ?? 0} verse(s) parsed`
+                                      + `, markers: ${d.shape?.markerStyle ?? 'unknown'}`,
+                                      (d.shape?.versesParsed ?? 0) >= 3 ? 'success' : 'warn',
+                                    );
+                                  } catch (err) {
+                                    toast(err instanceof Error ? err.message : String(err), 'error');
+                                  }
+                                }}
+                              >
+                                Test
+                              </button>
+                              <button
+                                className={`btn sm ${on ? 'primary' : ''}`}
+                                onClick={() => void toggleOnlineBible(b.id)}
+                              >
+                                {on ? 'In picker' : 'Add'}
+                              </button>
+                            </div>
+                          );
+                        })}
+                        {!onlineBibles.length && <p className="field-hint">No translations returned for this key.</p>}
+                      </div>
+                    </>
+                  )}
+
+                  <div className="row" style={{ marginTop: 'var(--sp-3)' }}>
+                    <span className="faint" style={{ fontSize: 'var(--fs-xs)' }}>
+                      {cacheInfo ? `${cacheInfo.passages} passage(s) cached · ${(cacheInfo.bytes / 1024).toFixed(0)} KB` : ''}
+                    </span>
+                    <div className="panel-head-spacer" />
+                    <button
+                      className="btn sm ghost"
+                      onClick={async () => {
+                        const r = await api.online.clearCache();
+                        await loadOnline();
+                        toast(`Cleared ${r.removed} cached passage(s)`, 'info');
+                      }}
+                    >
+                      Clear cache
+                    </button>
+                    <button
+                      className="btn sm ghost"
+                      onClick={async () => { await api.online.setKey(''); await loadOnline(); toast('Key removed', 'info'); }}
+                    >
+                      Remove key
+                    </button>
+                  </div>
+                </>
+              )}
+            </div>
 
             {catalogue?.groups.map((group) => (
               <div key={group.language} className="settings-group">

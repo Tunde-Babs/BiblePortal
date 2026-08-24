@@ -37,6 +37,7 @@ function Output() {
         blackout={live?.blackout ?? false}
         cleared={live?.cleared ?? false}
         logo={live?.logo ?? false}
+        showSectionLabel={live?.sectionLabels ?? false}
         showVerseNumbers
       />
 

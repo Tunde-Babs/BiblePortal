@@ -9,7 +9,7 @@ starts.
 
 ![macOS](https://img.shields.io/badge/macOS-Apple%20Silicon-black)
 ![Licence](https://img.shields.io/badge/licence-GPL--3.0-blue)
-![Tests](https://img.shields.io/badge/checks-268%20passing-brightgreen)
+![Tests](https://img.shields.io/badge/checks-293%20passing-brightgreen)
 ![Offline](https://img.shields.io/badge/offline-no%20account%2C%20no%20telemetry-informational)
 
 ---
@@ -74,7 +74,16 @@ Korean, Russian, Arabic, Swahili, Tagalog, Vietnamese, Afrikaans and Romanian.
 under active copyright held by their publishers. **No application may legally
 bundle or download them.**
 
-**If your church licenses one**, install it yourself via
+**If your church licenses one**, there are two routes.
+
+**Online, via API.Bible.** Enter your own key under
+**Settings ▸ Translations ▸ Licensed translations**, choose which appear in the
+picker, and they sit alongside the bundled ones. The key is stored in your user
+profile — never in this repository — and the translation abbreviation is shown
+with every passage, as publishers require. Passages are cached so a service is
+not at the mercy of the church wi-fi.
+
+**Offline, from a module you own** — via
 **Settings ▸ Translations ▸ Import a module you own**:
 
 | Format | Extensions | Notes |
@@ -136,7 +145,7 @@ ask for a right-click → Open on first launch.
 ## Verifying your install
 
 ```bash
-npm test             # typecheck + 268 unit checks + production build
+npm test             # typecheck + 293 unit checks + production build
 npm run smoke        # boots the app and drives the live pipeline
 npm run smoke:asr    # speech model load, local ONNX, real audio decode
 npm run bench:asr    # measures cue latency

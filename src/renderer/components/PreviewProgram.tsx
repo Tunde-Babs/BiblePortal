@@ -10,6 +10,7 @@ import { useCallback, useEffect } from 'react';
 import { api } from '../../shared/api';
 import { SlideSurface } from '../../shared/SlideSurface';
 import { slideOf, nextSlideOf } from '../../shared/slide-render';
+import type { Slide } from '../../shared/types';
 import { useApp } from '../stores/app';
 
 export function PreviewProgram() {
@@ -68,6 +69,9 @@ export function PreviewProgram() {
   }, [take]);
 
   const showVerseNumbers = settings?.presentation.showVerseNumbers ?? true;
+  // The operator's own panes keep showing the label even when the audience
+  // screen does not — that is what makes it a useful cue.
+  const audienceLabels = settings?.presentation.showSectionLabels ?? false;
 
   // Report what the preview surface actually measured and painted. A blank pane
   // has several possible causes that look identical from outside; these numbers
@@ -143,6 +147,7 @@ export function PreviewProgram() {
               deck={preview}
               theme={live?.theme ?? null}
               showVerseNumbers={showVerseNumbers}
+              showSectionLabel={audienceLabels}
             />
           </div>
           <footer className="pp-foot">
@@ -188,6 +193,7 @@ export function PreviewProgram() {
               cleared={live?.cleared ?? false}
               logo={live?.logo ?? false}
               showVerseNumbers={showVerseNumbers}
+              showSectionLabel={audienceLabels}
             />
           </div>
           <footer className="pp-foot">
@@ -204,6 +210,56 @@ export function PreviewProgram() {
           </footer>
         </div>
       </div>
+
+      {/* ------------------------------------------------------- slide list */}
+      {/*
+        Every slide of the staged item, so the operator can see the whole song
+        or passage at once and jump straight to a part. Stepping through with
+        Next/Prev is fine for a reading, but useless when a worship leader calls
+        for the bridge.
+      */}
+      {!!preview?.slides?.length && (
+        <div className="slide-strip">
+          <div className="slide-strip-head">
+            <span className="section-label">{preview.title || 'Staged'}</span>
+            <span className="faint" style={{ fontSize: 'var(--fs-xs)' }}>
+              {preview.slides.length} slide{preview.slides.length === 1 ? '' : 's'} · click to cue,
+              double-click to take
+            </span>
+          </div>
+
+          <div className="slide-strip-list scroll">
+            {preview.slides.map((slide: Slide, i: number) => {
+              const staged = i === preview.index;
+              // Only mark a slide as live when it is genuinely on the screen.
+              const isLive = onAir
+                && program?.index === i
+                && program?.title === preview.title;
+              return (
+                <button
+                  key={slide.id ?? i}
+                  className={`slide-chip ${staged ? 'staged' : ''} ${isLive ? 'live' : ''}`}
+                  onClick={() => void api.live.goToPreview(i)}
+                  onDoubleClick={async () => {
+                    await api.live.goToPreview(i);
+                    await api.live.take();
+                  }}
+                  title={slide.lines.join(' / ')}
+                >
+                  <span className="slide-chip-num mono">{i + 1}</span>
+                  <span className="slide-chip-body">
+                    {slide.caption && <span className="slide-chip-label">{slide.caption}</span>}
+                    <span className="slide-chip-text truncate">
+                      {slide.lines.find((l) => l.trim()) ?? '—'}
+                    </span>
+                  </span>
+                  {isLive && <span className="slide-chip-tally" />}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
 
       {/* ---------------------------------------------------- live controls */}
       <div className="pp-controls">

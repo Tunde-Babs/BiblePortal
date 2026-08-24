@@ -82,6 +82,12 @@ export function SongEditor({ song, onClose, onSaved }: Props) {
     song?.sections?.[0]?.id ?? '',
   );
   const [saving, setSaving] = useState(false);
+  /** Rows highlighted for a bulk paste. Always includes the active stanza. */
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  /** Row being edited inline in the left-hand list, if any. */
+  const [inlineId, setInlineId] = useState<string | null>(null);
+  const [pasteOpen, setPasteOpen] = useState(false);
+  const [pasteText, setPasteText] = useState('');
 
   useEffect(() => {
     if (!activeId && sections[0]) setActiveId(sections[0].id);
@@ -131,6 +137,124 @@ export function SongEditor({ song, onClose, onSaved }: Props) {
       return next;
     });
   }, []);
+
+  /**
+   * Take a pasted song and lay it into stanzas.
+   *
+   * Blocks separated by a blank line become separate stanzas — that is how
+   * songs are written and copied. Existing empty stanzas are filled first so a
+   * fresh editor does not leave a stray blank at the top, then any remaining
+   * blocks are appended. If rows are selected, those are replaced instead.
+   */
+  const applyPaste = useCallback(async (text: string) => {
+    const trimmed = text.trim();
+    if (!trimmed) return;
+
+    // Continue verse numbering from what is already labelled.
+    const startVerse = sections.reduce(
+      (n, s) => (s.type === 'verse' && s.number != null ? Math.max(n, s.number) : n), 0,
+    );
+
+    let blocks: SongSection[];
+    try {
+      blocks = await api.songs.splitStanzas(trimmed, { startVerse });
+    } catch {
+      blocks = [{ ...emptySection(`Verse ${startVerse + 1}`), body: trimmed }];
+    }
+    if (!blocks.length) return;
+
+    setSections((prev) => {
+      const targets = selected.size
+        ? prev.filter((s) => selected.has(s.id))
+        : prev.filter((s) => !s.body.trim());
+
+      const next = [...prev];
+      let used = 0;
+
+      // Reuse the target rows, keeping their position.
+      for (const target of targets) {
+        if (used >= blocks.length) break;
+        const i = next.findIndex((s) => s.id === target.id);
+        const block = blocks[used++];
+        next[i] = { ...next[i], body: block.body, label: block.label, type: block.type, number: block.number };
+      }
+
+      // Anything left over becomes new stanzas at the end.
+      for (; used < blocks.length; used++) next.push(blocks[used]);
+
+      return next;
+    });
+
+    setSelected(new Set());
+    setPasteOpen(false);
+    setPasteText('');
+    toast(
+      blocks.length === 1
+        ? 'Pasted into one stanza'
+        : `Split into ${blocks.length} stanzas on blank lines`,
+      'success',
+    );
+  }, [sections, selected, toast]);
+
+  /** Click behaviour: plain selects, ⌘/Ctrl adds, Shift extends. */
+  const rowClick = useCallback((id: string, index: number, e: React.MouseEvent) => {
+    if (e.metaKey || e.ctrlKey) {
+      setSelected((prev) => {
+        const next = new Set(prev);
+        if (next.has(id)) next.delete(id); else next.add(id);
+        return next;
+      });
+      setActiveId(id);
+      return;
+    }
+    if (e.shiftKey && activeId) {
+      const from = sections.findIndex((s) => s.id === activeId);
+      if (from >= 0) {
+        const [lo, hi] = from < index ? [from, index] : [index, from];
+        setSelected(new Set(sections.slice(lo, hi + 1).map((s) => s.id)));
+        return;
+      }
+    }
+    setSelected(new Set());
+    setActiveId(id);
+  }, [activeId, sections]);
+
+  // Paste and select-all have to be caught at the window: the stanza list is a
+  // plain div, which takes no focus, so a handler bound to it never sees a
+  // Cmd+V aimed at the page.
+  useEffect(() => {
+    const inField = (t: EventTarget | null) => {
+      const el = t as HTMLElement | null;
+      return !!el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable);
+    };
+
+    const onPaste = (e: ClipboardEvent) => {
+      if (inField(e.target)) return;              // let a field handle its own paste
+      const text = e.clipboardData?.getData('text/plain') ?? '';
+      if (!text.trim()) return;
+      e.preventDefault();
+      void applyPaste(text);
+    };
+
+    const onKey = (e: KeyboardEvent) => {
+      if (!(e.metaKey || e.ctrlKey) || inField(e.target)) return;
+      if (e.key === 'a') {
+        e.preventDefault();
+        setSelected(new Set(sections.map((x) => x.id)));
+      }
+      if (e.key === 'd') {                         // deselect
+        e.preventDefault();
+        setSelected(new Set());
+      }
+    };
+
+    window.addEventListener('paste', onPaste);
+    window.addEventListener('keydown', onKey);
+    return () => {
+      window.removeEventListener('paste', onPaste);
+      window.removeEventListener('keydown', onKey);
+    };
+  }, [applyPaste, sections]);
 
   /** What the active stanza will look like on the screen. */
   const previewDeck = useMemo(() => {
@@ -288,22 +412,107 @@ export function SongEditor({ song, onClose, onSaved }: Props) {
       {/* ------------------------------------------------------------ body */}
       <div className="song-editor-body">
         {/* stanza list */}
-        <div className="stanza-list">
+        <div
+          className="stanza-list"
+          onPaste={(e) => {
+            // Only intercept a paste aimed at the list itself, never one aimed
+            // at a field inside it.
+            const el = e.target as HTMLElement;
+            if (el.tagName === 'TEXTAREA' || el.tagName === 'INPUT') return;
+            const text = e.clipboardData.getData('text/plain');
+            if (!text.includes('\n')) return;
+            e.preventDefault();
+            void applyPaste(text);
+          }}
+        >
+          <div className="stanza-tools">
+            <button className="btn sm" onClick={() => setPasteOpen((v) => !v)}>
+              Paste song
+            </button>
+            {selected.size > 0 ? (
+              <>
+                <span className="chip accent">{selected.size} selected</span>
+                <button className="btn sm ghost" onClick={() => setSelected(new Set())}>Clear</button>
+              </>
+            ) : (
+              <span className="faint" style={{ fontSize: 'var(--fs-xs)' }}>
+                <span className="kbd">⌘A</span> select all · <span className="kbd">⌘V</span> paste a song
+              </span>
+            )}
+          </div>
+
+          {pasteOpen && (
+            <div className="stanza-paste">
+              <textarea
+                className="textarea"
+                autoFocus
+                rows={7}
+                placeholder={'Paste the whole song here.\n\nLeave a blank line between stanzas — each block becomes its own stanza.'}
+                value={pasteText}
+                onChange={(e) => setPasteText(e.target.value)}
+              />
+              <div className="row" style={{ marginTop: 'var(--sp-2)' }}>
+                <button className="btn primary" onClick={() => void applyPaste(pasteText)} disabled={!pasteText.trim()}>
+                  Split into stanzas
+                </button>
+                <button className="btn ghost" onClick={() => { setPasteOpen(false); setPasteText(''); }}>Cancel</button>
+              </div>
+              <span className="field-hint">
+                {selected.size
+                  ? `Replaces the ${selected.size} selected stanza(s), then adds any extras.`
+                  : 'Fills empty stanzas first, then adds more as needed.'}
+              </span>
+            </div>
+          )}
           {sections.map((section, i) => (
             <div
               key={section.id}
-              className={`stanza-row ${section.id === activeId ? 'active' : ''}`}
-              onClick={() => setActiveId(section.id)}
+              className={`stanza-row ${section.id === activeId ? 'active' : ''} ${selected.has(section.id) ? 'picked' : ''}`}
+              onClick={(e) => rowClick(section.id, i, e)}
               role="button"
               tabIndex={0}
               onKeyDown={(e) => { if (e.key === 'Enter') setActiveId(section.id); }}
             >
               <span className="stanza-num mono">{i + 1}</span>
               <div className="stanza-main">
-                <div className="stanza-label truncate">{section.label}</div>
-                <div className="stanza-preview truncate">
-                  {section.body.split('\n').find((l) => l.trim()) || <span className="faint">empty</span>}
-                </div>
+                <input
+                  className="stanza-label-input"
+                  value={section.label}
+                  list="stanza-labels"
+                  onChange={(e) => patchSection(section.id, { label: e.target.value })}
+                  onClick={(e) => e.stopPropagation()}
+                  aria-label={`Label for stanza ${i + 1}`}
+                />
+
+                {inlineId === section.id ? (
+                  /* Edit here rather than only on the right, so the list is a
+                     working surface and not just a table of contents. */
+                  <textarea
+                    className="stanza-inline"
+                    autoFocus
+                    value={section.body}
+                    onChange={(e) => patchSection(section.id, { body: e.target.value })}
+                    onClick={(e) => e.stopPropagation()}
+                    onBlur={() => setInlineId(null)}
+                    onKeyDown={(e) => {
+                      e.stopPropagation();
+                      if (e.key === 'Escape') setInlineId(null);
+                    }}
+                    rows={Math.min(Math.max(section.body.split('\n').length, 2), 8)}
+                  />
+                ) : (
+                  <div
+                    className="stanza-preview"
+                    onClick={(e) => { e.stopPropagation(); setActiveId(section.id); setInlineId(section.id); }}
+                    title="Click to edit here"
+                  >
+                    {section.body.trim()
+                      ? section.body.split('\n').filter((l) => l.trim()).slice(0, 3).map((l, k) => (
+                          <div className="truncate" key={k}>{l}</div>
+                        ))
+                      : <span className="faint">empty — click to write</span>}
+                  </div>
+                )}
               </div>
               <div className="stanza-actions">
                 <button
