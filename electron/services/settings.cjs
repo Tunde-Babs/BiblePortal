@@ -10,6 +10,8 @@ const DEFAULT_THEME = {
   id: 'theme_default',
   name: 'Sanctuary',
   background: { type: 'gradient', from: '#0b1020', to: '#131a33', angle: 160, image: null, opacity: 1 },
+  /** Per-content backgrounds; null falls through to `background` above. */
+  backdrops: { default: null, scripture: null, song: null },
   text: {
     fontFamily: "'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif",
     size: 62, weight: 600, color: '#ffffff', align: 'center', lineHeight: 1.28,
@@ -44,6 +46,17 @@ const DEFAULTS = {
     showSectionLabels: false,
     blankOnStart: true,
     clearBetweenItems: false,
+  },
+  /**
+   * Serving the audience output to OBS (or any browser) on this machine.
+   * Off until asked for — nothing should open a port on a church network
+   * without the operator choosing it.
+   */
+  outputServer: {
+    enabled: false,
+    port: 7373,
+    /** Loopback only unless the operator opts in to other machines. */
+    allowLan: false,
   },
   stage: {
     showClock: true,

@@ -19,6 +19,27 @@
   max-height: 100%;
 }
 
+/* Theme backdrop: the standing background behind the words. Sits under the
+   per-item media layer so a clip chosen for one slide covers it. */
+.slide-backdrop {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  z-index: 0;
+  pointer-events: none;
+}
+
+/* Darkens a busy picture so white text stays legible over it. */
+.slide-scrim {
+  position: absolute;
+  inset: 0;
+  background: #000;
+  z-index: 1;
+  pointer-events: none;
+}
+
 .slide-blackout {
   position: absolute;
   inset: 0;

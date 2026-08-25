@@ -41,6 +41,10 @@ const pptx = require('../electron/lib/pptx.cjs');
 const zipStream = require('../electron/lib/zip-stream.cjs');
 const { SermonService } = require('../electron/services/sermon.cjs');
 const { OnlineBibleService } = require('../electron/services/online-bible.cjs');
+const prose = require('../electron/lib/prose.cjs');
+const { EasyWorshipImportService } = require('../electron/services/easyworship-import.cjs');
+const { OutputServer } = require('../electron/services/output-server.cjs');
+const paradox = require('../electron/lib/paradox.cjs');
 const { MAX_RESIDENT_TRANSLATIONS, MAX_RESIDENT_INDEXES } = require('../electron/services/bible.cjs');
 const { AIService } = require('../electron/services/ai.cjs');
 const { LiveState } = require('../electron/live-state.cjs');
@@ -805,6 +809,40 @@ await checkAsync('rejects a database with no Bible table', async () => {
 
 // ------------------------------------------- licensed (online) translations
 
+describe('Paragraphed translations');
+// Fixtures use synthetic prose; no scripture text appears in this suite.
+check('sentences split on terminal punctuation', () =>
+  eq(prose.toSentences('Alpha one here. Beta two here! Gamma three here?').length, 3));
+check('an abbreviation is not mistaken for a sentence end', () => {
+  eq(prose.toSentences('Ask Dr. Smith about it. Then leave.').length, 2);
+  eq(prose.toSentences('Alpha etc. continues here. Beta follows.').length, 2);
+});
+check('prose groups into slide-sized chunks', () => {
+  const text = Array.from({ length: 6 }, (_, i) => `Sentence number ${i} of the sample.`).join(' ');
+  ok(prose.chunkProse(text, 80).length > 1, 'a long passage was left as one slide');
+  eq(prose.chunkProse(text, 4000).length, 1);
+});
+check('a sentence is never cut in half', () => {
+  const text = 'A single sentence far longer than the target ceiling on its own, unbroken throughout.';
+  const chunks = prose.chunkProse(text, 20);
+  eq(chunks.length, 1, 'an over-long sentence was split');
+  eq(chunks[0], text);
+});
+check('lines wrap without breaking words', () => {
+  const lines = prose.toLines('one two three four five six seven eight', 4);
+  eq(lines.length, 4);
+  eq(lines.join(' '), 'one two three four five six seven eight');
+});
+check('empty prose yields nothing', () => {
+  eq(prose.chunkProse(''), []);
+  eq(prose.chunkProse('   '), []);
+  eq(prose.toLines(''), []);
+});
+check('no chunk is empty or whitespace only', () => {
+  const text = 'Alpha here.  Beta here.   Gamma here.';
+  ok(prose.chunkProse(text, 20).every((c) => c.trim().length > 0));
+});
+
 describe('API.Bible connector');
 check('passage ids use USFM book codes', () => {
   const id = (q) => OnlineBibleService.passageId(reference.parseOne(q));
@@ -845,6 +883,50 @@ check('an unparsed block is attributed to the opening verse, not dropped', () =>
     { verse: 16, text: 'A block with no numbering.' },
   ]);
 });
+await checkAsync('a diagnosis describes the translation it tested, not the last one fetched', async () => {
+  // Shape used to live on the service instance and was only refreshed on a
+  // live fetch, so a cached lookup reported whichever translation had been
+  // fetched most recently. Two translations, different shapes, one after the
+  // other is exactly the sequence that exposed it.
+  const settings = new SettingsService(new Store(path.join(TMP, 'shape1')));
+  await settings.patch({ online: { apiKey: 'FIXTURE-not-a-real-key-0000', enabled: true } });
+  const svc = new OnlineBibleService({ settings, cacheDir: path.join(TMP, 'shape1-cache') });
+
+  // Stand in for the network: one versified, one continuous.
+  const bodies = {
+    versified: '[16] Alpha body. [17] Beta body. [18] Gamma body.',
+    paragraph: 'One continuous block with no numbering whatsoever.',
+  };
+  svc._get = async (pathname) => ({
+    content: pathname.includes('versified') ? bodies.versified : bodies.paragraph,
+    copyright: 'Fixture',
+  });
+
+  const versified = await svc.diagnose('versified', 'John 3:16-18');
+  eq(versified.shape.versesParsed, 3);
+  eq(versified.shape.markerStyle, 'bracket');
+
+  const paragraph = await svc.diagnose('paragraph', 'John 3:16-18');
+  eq(paragraph.shape.versesParsed, 1, 'reported the previous translation\'s shape');
+  eq(paragraph.shape.markerStyle, 'none');
+
+  // And back again, now that both are cached — still must describe itself.
+  const again = await svc.diagnose('versified', 'John 3:16-18');
+  eq(again.shape.versesParsed, 3);
+});
+await checkAsync('a diagnosis always fetches rather than replaying the cache', async () => {
+  const settings = new SettingsService(new Store(path.join(TMP, 'shape2')));
+  await settings.patch({ online: { apiKey: 'FIXTURE-not-a-real-key-0000', enabled: true } });
+  const svc = new OnlineBibleService({ settings, cacheDir: path.join(TMP, 'shape2-cache') });
+
+  let calls = 0;
+  svc._get = async () => { calls += 1; return { content: '[1] Alpha body.', copyright: '' }; };
+
+  await svc.diagnose('x', 'John 3:1');
+  await svc.diagnose('x', 'John 3:1');
+  eq(calls, 2, 'the second diagnosis was served from cache');
+});
+
 check('the shape report carries no verse text', () => {
   const verses = [{ verse: 16, text: 'Some fetched body text' }];
   const shape = OnlineBibleService.describeShape({ content: '[16] Some fetched body text', copyright: 'x' }, verses);
@@ -1105,7 +1187,416 @@ check('ignorable destinations are skipped', () =>
   eq(rtfToText(String.raw`{\rtf1{\*\generator Riched20 10.0}Delta line\par}`), 'Delta line'));
 check('escaped braces survive', () =>
   eq(rtfToText(String.raw`{\rtf1 A \{literal\} brace\par}`), 'A {literal} brace'));
+check('ignorable destinations are skipped whole', () => {
+  // `{\*\foo ...}` means "skip this if you do not understand it". Paragraph
+  // numbering groups carry literal brackets as their before/after text, which
+  // appeared at the head of every imported song until this was honoured.
+  const pn = String.raw`{\rtf1{\*\pnseclvl5\pndec\pnstart1{\pntxtb{(}}{\pntxta{)}}}Body text\par}`;
+  eq(rtfToText(pn), 'Body text');
+});
+check('several ignorable destinations in a row leave nothing behind', () => {
+  const many = String.raw`{\rtf1` +
+    String.raw`{\*\pnseclvl1{\pntxtb{(}}{\pntxta{)}}}` +
+    String.raw`{\*\pnseclvl2{\pntxtb{(}}{\pntxta{)}}}` +
+    String.raw`{\*\pnseclvl3{\pntxtb{(}}{\pntxta{)}}}` +
+    String.raw`Alpha line\par}`;
+  eq(rtfToText(many), 'Alpha line');
+});
+check('an unknown ignorable destination is skipped too', () =>
+  // The rule is generic, so a construct nobody has enumerated is still safe.
+  eq(rtfToText(String.raw`{\rtf1{\*\somethingnew{\inner{[}}}Kept text\par}`), 'Kept text'));
+check('a literal asterisk outside a destination survives', () =>
+  eq(rtfToText(String.raw`{\rtf1 Star * here\par}`), 'Star * here'));
+
 check('hex escapes decode', () => ok(/caf/.test(rtfToText(String.raw`{\rtf1 caf\'e9 stop\par}`))));
+
+describe('Paradox tables (EasyWorship song libraries)');
+
+/**
+ * Build a small Paradox table in memory. EasyWorship stores its song library in
+ * this format and offers no export, so reading it directly is the only
+ * migration path — which makes the reader worth testing on a known table.
+ * All content here is placeholder text.
+ */
+function buildParadoxFixture({ recordSize = 40, records = 2, breakSizes = false } = {}) {
+  const HEADER = 2048, BLOCK = 1024, NF = 3;
+  const buf = Buffer.alloc(HEADER + BLOCK, 0);
+
+  buf.writeUInt16LE(recordSize, 0x00);
+  buf.writeUInt16LE(HEADER, 0x02);
+  buf.writeUInt8(0, 0x04);
+  buf.writeUInt8(1, 0x05);
+  buf.writeUInt32LE(records, 0x06);
+  buf.writeUInt16LE(NF, 0x21);
+
+  // Alpha(20) + Alpha(16) + Long(4) = 40. `breakSizes` makes them disagree
+  // with the declared record size, which the reader must refuse.
+  let off = 0x78;
+  for (const [type, size] of [[1, 20], [1, breakSizes ? 8 : 16], [4, 4]]) {
+    buf.writeUInt8(type, off);
+    buf.writeUInt8(size, off + 1);
+    off += 2;
+  }
+
+  let p = 0x78 + NF * 2 + 4 + NF * 4;
+  const put = (str) => { buf.write(str, p, 'latin1'); p += str.length + 1; };
+  put('sample.DB');
+  p += 4;
+  put('Title'); put('Author'); put('Number');
+
+  const b0 = HEADER;
+  buf.writeInt16LE(0, b0);
+  buf.writeInt16LE(0, b0 + 2);
+  buf.writeInt16LE(recordSize * (records - 1), b0 + 4);
+
+  const encodeLong = (n) => (n ^ 0x80000000) >>> 0;
+  for (let i = 0; i < records; i++) {
+    const at = b0 + 6 + i * recordSize;
+    buf.write(`Sample ${i}`, at, 'latin1');
+    buf.write(`Writer ${i}`, at + 20, 'latin1');
+    buf.writeUInt32BE(encodeLong(100 + i), at + 36);
+  }
+  return buf;
+}
+
+await checkAsync('reads records, field names and types', async () => {
+  const file = path.join(TMP, 'px-basic.DB');
+  fs.writeFileSync(file, buildParadoxFixture());
+  const res = await paradox.readTable(file);
+  eq(res.table, 'sample.DB');
+  eq(res.rows.length, 2);
+  eq(res.fields.map((f) => f.name), ['Title', 'Author', 'Number']);
+  eq(res.fields.map((f) => f.type), ['alpha', 'alpha', 'long']);
+  eq(res.rows[0].Title, 'Sample 0');
+  eq(res.rows[1].Author, 'Writer 1');
+});
+await checkAsync('decodes the sign-flipped integers Paradox stores', async () => {
+  const file = path.join(TMP, 'px-int.DB');
+  fs.writeFileSync(file, buildParadoxFixture());
+  const res = await paradox.readTable(file);
+  // Stored with the high bit inverted so a byte comparison sorts correctly.
+  eq(res.rows.map((r) => r.Number), [100, 101]);
+});
+await checkAsync('refuses a table whose field sizes do not total a record', async () => {
+  // A misread layout would make every value after the first field garbage, so
+  // this must fail loudly rather than return plausible-looking nonsense.
+  const file = path.join(TMP, 'px-bad.DB');
+  fs.writeFileSync(file, buildParadoxFixture({ breakSizes: true }));
+  try { await paradox.readTable(file); return false; }
+  catch (err) { return /layout not understood/i.test(err.message); }
+});
+await checkAsync('rejects a file that is not a Paradox table', async () => {
+  const file = path.join(TMP, 'px-nonsense.DB');
+  fs.writeFileSync(file, Buffer.alloc(4096, 0xAB));
+  try { await paradox.readTable(file); return false; }
+  catch { return true; }
+});
+await checkAsync('inspect reads the header without loading the table', async () => {
+  const file = path.join(TMP, 'px-inspect.DB');
+  fs.writeFileSync(file, buildParadoxFixture({ records: 2 }));
+  const info = await paradox.inspect(file);
+  eq([info.records, info.recordSize], [2, 40]);
+  eq(info.fields.map((f) => f.name), ['Title', 'Author', 'Number']);
+});
+check('trailing NUL and space padding is trimmed from text fields', () => {
+  // Paradox pads fixed-width text; untrimmed values would carry the padding
+  // straight onto a slide.
+  const header = paradox.readHeader(buildParadoxFixture());
+  eq(header.recordSize, 40);
+  eq(header.fields.reduce((n, f) => n + f.size, 0), 40);
+});
+
+describe('Theme backgrounds');
+await checkAsync('a new theme starts with no backgrounds set', async () => {
+  const store = new Store(path.join(TMP, 'bd1'));
+  const settings = new SettingsService(store);
+  const theme = await settings.activeTheme();
+  eq(theme.backdrops, { default: null, scripture: null, song: null });
+});
+await checkAsync('backgrounds survive a save and reload', async () => {
+  const store = new Store(path.join(TMP, 'bd2'));
+  const settings = new SettingsService(store);
+  const theme = await settings.activeTheme();
+  const shot = { file: '/m/loop.mp4', kind: 'video', fit: 'cover', opacity: 1, dim: 0.4, blur: 6 };
+  await settings.saveTheme({ ...theme, backdrops: { ...theme.backdrops, song: shot } });
+
+  const again = await new SettingsService(store).activeTheme();
+  eq(again.backdrops.song, shot);
+  eq(again.backdrops.scripture, null, 'setting one slot must not fill the others');
+});
+await checkAsync('a background can be cleared again', async () => {
+  const store = new Store(path.join(TMP, 'bd3'));
+  const settings = new SettingsService(store);
+  const theme = await settings.activeTheme();
+  await settings.saveTheme({ ...theme,
+    backdrops: { ...theme.backdrops, scripture: { file: '/m/a.jpg', kind: 'image', fit: 'cover', opacity: 1, dim: 0.3, blur: 0 } } });
+  const mid = await settings.activeTheme();
+  ok(mid.backdrops.scripture);
+  await settings.saveTheme({ ...mid, backdrops: { ...mid.backdrops, scripture: null } });
+  eq((await settings.activeTheme()).backdrops.scripture, null);
+});
+
+describe('Output server (OBS Browser Source)');
+await checkAsync('serves the output page and streams live state', async () => {
+  const root = path.join(TMP, 'srv-root');
+  fs.mkdirSync(root, { recursive: true });
+  fs.writeFileSync(path.join(root, 'output.html'), '<!doctype html><title>out</title>');
+
+  let state = { program: { kind: 'song' }, blackout: false };
+  const srv = new OutputServer({
+    rootDir: () => root,
+    mediaRoots: () => [],
+    getState: () => state,
+  });
+  const { port } = await srv.start({ port: 0 });
+  try {
+    const page = await fetch(`http://127.0.0.1:${port}/output`);
+    eq(page.status, 200);
+    ok((await page.text()).includes('<title>out</title>'));
+
+    // The stream must open with current state, not wait for a change.
+    const res = await fetch(`http://127.0.0.1:${port}/live`);
+    eq(res.headers.get('content-type'), 'text/event-stream');
+    const reader = res.body.getReader();
+    const first = new TextDecoder().decode((await reader.read()).value);
+    ok(first.startsWith('data: '), 'stream should open with a state frame');
+    eq(JSON.parse(first.slice(6).trim()).program.kind, 'song');
+
+    // A change reaches the already-connected client.
+    state = { program: { kind: 'bible' }, blackout: true };
+    srv.broadcast(state);
+    const next = new TextDecoder().decode((await reader.read()).value);
+    eq(JSON.parse(next.slice(6).trim()).program.kind, 'bible');
+    await reader.cancel();
+  } finally { await srv.stop(); }
+});
+await checkAsync('the alignment pattern is self-contained and never cached', async () => {
+  const srv = new OutputServer({ rootDir: () => TMP, mediaRoots: () => [], getState: () => ({}) });
+  const { port } = await srv.start({ port: 0 });
+  try {
+    const res = await fetch(`http://127.0.0.1:${port}/test`);
+    eq(res.status, 200);
+    // Must not be cached: it is used precisely when something is already wrong.
+    ok(/no-store/.test(res.headers.get('cache-control') ?? ''), 'alignment page must not be cached');
+    const html = await res.text();
+    // No external references — it has to render even if the bundle is broken.
+    ok(!/<script[^>]+src=|<link[^>]+href=/i.test(html), 'must not pull in external assets');
+    ok(html.includes('16 / 9'), 'should lock itself to 16:9');
+    for (const corner of ['TOP LEFT', 'TOP RIGHT', 'BOTTOM LEFT', 'BOTTOM RIGHT']) {
+      ok(html.includes(corner), `missing ${corner} marker`);
+    }
+  } finally { await srv.stop(); }
+});
+await checkAsync('media is served only from the allowed folders', async () => {
+  const allowed = path.join(TMP, 'srv-media');
+  const secret = path.join(TMP, 'srv-secret');
+  fs.mkdirSync(allowed, { recursive: true });
+  fs.mkdirSync(secret, { recursive: true });
+  fs.writeFileSync(path.join(allowed, 'bg.png'), Buffer.alloc(16, 7));
+  fs.writeFileSync(path.join(secret, 'keys.txt'), 'do not serve me');
+
+  const srv = new OutputServer({
+    rootDir: () => allowed, mediaRoots: () => [allowed], getState: () => ({}),
+  });
+  const { port } = await srv.start({ port: 0 });
+  try {
+    const ok200 = await fetch(`http://127.0.0.1:${port}/media?p=${encodeURIComponent(path.join(allowed, 'bg.png'))}`);
+    eq(ok200.status, 200);
+    eq(ok200.headers.get('content-type'), 'image/png');
+
+    // Outside the allowlist entirely.
+    const denied = await fetch(`http://127.0.0.1:${port}/media?p=${encodeURIComponent(path.join(secret, 'keys.txt'))}`);
+    eq(denied.status, 403, 'a path outside the media folders must be refused');
+
+    // Climbing out with .. must not work either.
+    const climb = path.join(allowed, '..', 'srv-secret', 'keys.txt');
+    const traversal = await fetch(`http://127.0.0.1:${port}/media?p=${encodeURIComponent(climb)}`);
+    eq(traversal.status, 403, 'traversal out of the media folder must be refused');
+
+    // Nor via the static route.
+    const staticClimb = await fetch(`http://127.0.0.1:${port}/../srv-secret/keys.txt`);
+    ok(staticClimb.status === 403 || staticClimb.status === 404, `got ${staticClimb.status}`);
+  } finally { await srv.stop(); }
+});
+await checkAsync('binds loopback only unless LAN is asked for', async () => {
+  const srv = new OutputServer({ rootDir: () => TMP, mediaRoots: () => [], getState: () => ({}) });
+  await srv.start({ port: 0 });
+  try {
+    eq(srv.status().host, '127.0.0.1', 'must not listen on all interfaces by default');
+    ok(srv.status().url.includes('127.0.0.1'));
+  } finally { await srv.stop(); }
+});
+await checkAsync('a taken port reports clearly instead of throwing raw', async () => {
+  const a = new OutputServer({ rootDir: () => TMP, mediaRoots: () => [], getState: () => ({}) });
+  const { port } = await a.start({ port: 0 });
+  const b = new OutputServer({ rootDir: () => TMP, mediaRoots: () => [], getState: () => ({}) });
+  try {
+    let message = '';
+    try { await b.start({ port }); } catch (err) { message = err.message; }
+    ok(/already in use/i.test(message), `unhelpful error: ${message}`);
+  } finally { await a.stop(); await b.stop(); }
+});
+await checkAsync('stopping releases the port and drops clients', async () => {
+  const srv = new OutputServer({ rootDir: () => TMP, mediaRoots: () => [], getState: () => ({}) });
+  const { port } = await srv.start({ port: 0 });
+  const res = await fetch(`http://127.0.0.1:${port}/live`);
+  const reader = res.body.getReader();
+  await reader.read();
+  eq(srv.status().clients, 1);
+  await reader.cancel().catch(() => {});
+  await srv.stop();
+  eq(srv.status().clients, 0);
+  eq(srv.running, false);
+
+  // The port is free again — a fresh server can take it.
+  const again = new OutputServer({ rootDir: () => TMP, mediaRoots: () => [], getState: () => ({}) });
+  await again.start({ port });
+  eq(again.running, true);
+  await again.stop();
+});
+
+describe('Bulk song deletion');
+await checkAsync('removeMany deletes the ticked songs in one save', async () => {
+  const store = new Store(path.join(TMP, 'bulk1'));
+  const songs = new SongService(store);
+  const made = [];
+  for (const t of ['One', 'Two', 'Three', 'Four']) made.push(await songs.upsert({ title: t, sections: [] }));
+
+  const res = await songs.removeMany([made[0].id, made[2].id]);
+  eq([res.removed, res.remaining], [2, 2]);
+  eq((await songs.all()).map((x) => x.title).sort(), ['Four', 'Two']);
+});
+await checkAsync('removeMany ignores ids that are not there', async () => {
+  const store = new Store(path.join(TMP, 'bulk2'));
+  const songs = new SongService(store);
+  const a = await songs.upsert({ title: 'Kept', sections: [] });
+  const res = await songs.removeMany([a.id, 'no-such-id', 'also-missing']);
+  eq([res.removed, res.remaining], [1, 0]);
+});
+await checkAsync('removeMany with an empty list changes nothing', async () => {
+  const store = new Store(path.join(TMP, 'bulk3'));
+  const songs = new SongService(store);
+  await songs.upsert({ title: 'Kept', sections: [] });
+  eq((await songs.removeMany([])).removed, 0);
+  eq((await songs.removeMany(null)).removed, 0);
+  eq((await songs.all()).length, 1);
+});
+await checkAsync('removeAll empties the library', async () => {
+  const store = new Store(path.join(TMP, 'bulk4'));
+  const songs = new SongService(store);
+  for (const t of ['A', 'B', 'C']) await songs.upsert({ title: t, sections: [] });
+  const res = await songs.removeAll();
+  eq([res.removed, res.remaining], [3, 0]);
+  eq((await songs.all()).length, 0);
+});
+await checkAsync('a bulk delete of many songs is one write, not one per song', async () => {
+  const store = new Store(path.join(TMP, 'bulk5'));
+  const songs = new SongService(store);
+  const ids = [];
+  for (let i = 0; i < 400; i += 1) ids.push((await songs.upsert({ title: `Song ${i}`, sections: [] })).id);
+
+  let writes = 0;
+  const realSave = songs.save.bind(songs);
+  songs.save = async (list) => { writes += 1; return realSave(list); };
+
+  const started = Date.now();
+  const res = await songs.removeMany(ids);
+  const took = Date.now() - started;
+
+  eq(res.removed, 400);
+  eq(writes, 1, `expected a single save, saw ${writes}`);
+  ok(took < 1000, `bulk delete took ${took}ms`);
+});
+await checkAsync('bulk delete clears the songs out of collections too', async () => {
+  const store = new Store(path.join(TMP, 'bulk6'));
+  const songs = new SongService(store);
+  const collections = new CollectionService(store);
+  const a = await songs.upsert({ title: 'In a set', sections: [] });
+  const b = await songs.upsert({ title: 'Also in it', sections: [] });
+  const c = await songs.upsert({ title: 'Stays', sections: [] });
+  const set = await collections.create('Sunday');
+  await collections.addSongs(set.id, [a.id, b.id, c.id]);
+
+  await songs.removeMany([a.id, b.id]);
+  await collections.purgeSongs([a.id, b.id]);
+
+  const after = (await collections.all()).find((x) => x.id === set.id);
+  eq(after.songIds, [c.id], 'deleted songs must not linger as dangling ids');
+});
+
+describe('Undoing an EasyWorship import');
+await checkAsync('removal takes only the songs the importer added', async () => {
+  const store = new Store(path.join(TMP, 'undo1'));
+  const songs = new SongService(store);
+  const svc = new EasyWorshipImportService({
+    songs,
+    plans: new PlanService(store),
+    media: new MediaService({ store, mediaDir: path.join(TMP, 'undo1-media') }),
+  });
+
+  await songs.upsert({ title: 'Written Here', sections: [], notes: '' });
+  await songs.upsert({ title: 'From EasyWorship A', sections: [], notes: 'Imported from EasyWorship' });
+  await songs.upsert({ title: 'From EasyWorship B', sections: [], notes: 'Imported from EasyWorship' });
+
+  eq((await svc.countImported()).count, 2);
+  const res = await svc.removeImported();
+  eq([res.removed, res.remaining], [2, 1]);
+  eq((await songs.all()).map((x) => x.title), ['Written Here']);
+});
+await checkAsync('removing when nothing was imported is a no-op', async () => {
+  const store = new Store(path.join(TMP, 'undo2'));
+  const songs = new SongService(store);
+  const svc = new EasyWorshipImportService({
+    songs,
+    plans: new PlanService(store),
+    media: new MediaService({ store, mediaDir: path.join(TMP, 'undo2-media') }),
+  });
+  await songs.upsert({ title: 'Mine', sections: [], notes: '' });
+  eq((await svc.removeImported()).removed, 0);
+  eq((await songs.all()).length, 1);
+});
+
+describe('Importing EasyWorship media');
+await checkAsync('copies media out of the Resources folders', async () => {
+  const profile = path.join(TMP, 'ewmedia');
+  fs.mkdirSync(path.join(profile, 'Resources', 'Images'), { recursive: true });
+  fs.mkdirSync(path.join(profile, 'Resources', 'Videos'), { recursive: true });
+  fs.writeFileSync(path.join(profile, 'Resources', 'Images', 'backdrop one.jpg'), Buffer.alloc(2048, 1));
+  fs.writeFileSync(path.join(profile, 'Resources', 'Images', 'notes.txt'), 'not media');
+  fs.writeFileSync(path.join(profile, 'Resources', 'Videos', 'loop.mp4'), Buffer.alloc(4096, 2));
+
+  const store = new Store(path.join(TMP, 'ewmedia-lib'));
+  const media = new MediaService({ store, mediaDir: path.join(TMP, 'ewmedia-out') });
+  const svc = new EasyWorshipImportService({
+    songs: new SongService(store), plans: new PlanService(store), media,
+  });
+
+  const res = await svc.importProfileMedia(profile);
+  eq(res.imported, 2, 'expected the image and the video, and nothing else');
+  const items = await media.all();
+  eq(items.map((m) => m.kind).sort(), ['image', 'video']);
+  // A video is a motion background, so it should loop by default.
+  ok(items.find((m) => m.kind === 'video').loop);
+  // Copied, not referenced — the originals can move afterwards.
+  ok(items.every((m) => fs.existsSync(m.file)));
+  ok(items.every((m) => (m.tags ?? []).includes('easyworship')));
+});
+await checkAsync('re-running the media import does not duplicate', async () => {
+  const profile = path.join(TMP, 'ewmedia2');
+  fs.mkdirSync(path.join(profile, 'Resources', 'Images'), { recursive: true });
+  fs.writeFileSync(path.join(profile, 'Resources', 'Images', 'once.jpg'), Buffer.alloc(1024, 3));
+
+  const store = new Store(path.join(TMP, 'ewmedia2-lib'));
+  const media = new MediaService({ store, mediaDir: path.join(TMP, 'ewmedia2-out') });
+  const svc = new EasyWorshipImportService({
+    songs: new SongService(store), plans: new PlanService(store), media,
+  });
+
+  eq((await svc.importProfileMedia(profile)).imported, 1);
+  const second = await svc.importProfileMedia(profile);
+  eq([second.imported, second.skipped], [0, 1]);
+  eq((await media.all()).length, 1);
+});
 
 describe('EasyWorship schedules');
 await checkAsync('reads songs and media from a .ewsx', async () => {

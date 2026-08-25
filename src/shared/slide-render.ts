@@ -8,7 +8,7 @@
  */
 
 import type { CSSProperties } from 'react';
-import type { Deck, Slide, SongStyle, Theme } from './types';
+import type { Backdrop, Deck, Slide, SongStyle, Theme } from './types';
 
 /** The design resolution every surface scales from. */
 export const STAGE_W = 1920;
@@ -18,6 +18,7 @@ export const FALLBACK_THEME: Theme = {
   id: 'fallback',
   name: 'Fallback',
   background: { type: 'gradient', from: '#0b1020', to: '#131a33', angle: 160, image: null, opacity: 1 },
+  backdrops: { default: null, scripture: null, song: null },
   text: {
     fontFamily: "'Inter', system-ui, sans-serif",
     size: 62, weight: 600, color: '#ffffff', align: 'center',
@@ -28,6 +29,35 @@ export const FALLBACK_THEME: Theme = {
   transition: { type: 'fade', duration: 320 },
   lowerThird: { enabled: false, height: 26, background: 'rgba(6,10,24,0.86)', accent: '#5b7cfa' },
 };
+
+/**
+ * Which backdrop, if any, belongs behind this deck.
+ *
+ * Media the operator sent for one specific item is not handled here — that
+ * wins outright and is rendered by the surface. This is the standing
+ * background for a kind of content: scripture, songs, or everything else.
+ */
+export function resolveBackdrop(deck: Deck | null, theme: Theme): Backdrop | null {
+  const set = theme.backdrops;
+  if (!set) return null;
+  const perKind = deck?.kind === 'scripture' ? set.scripture
+    : deck?.kind === 'song' ? set.song
+      : null;
+  const chosen = perKind ?? set.default ?? null;
+  return chosen?.file ? chosen : null;
+}
+
+/** Filters applied to a backdrop layer, so busy pictures stay readable. */
+export function backdropStyle(b: Backdrop): CSSProperties {
+  return {
+    opacity: Math.max(0, Math.min(1, b.opacity ?? 1)),
+    filter: b.blur > 0 ? `blur(${b.blur}px)` : undefined,
+    objectFit: b.fit === 'contain' ? 'contain' : 'cover',
+    // Blur samples beyond the element's edge, leaving a translucent rim; growing
+    // the layer past the surface keeps the edges solid.
+    transform: b.blur > 0 ? `scale(${1 + b.blur / 100})` : undefined,
+  };
+}
 
 export function backgroundStyle(theme: Theme): CSSProperties {
   const bg = theme.background;

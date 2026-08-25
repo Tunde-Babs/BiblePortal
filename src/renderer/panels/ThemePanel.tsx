@@ -9,7 +9,17 @@
 import { useCallback, useEffect, useState } from 'react';
 
 import { api } from '../../shared/api';
-import type { Theme } from '../../shared/types';
+import { fileUrl } from '../../shared/file-url';
+import type { Backdrop, MediaItem, Theme } from '../../shared/types';
+
+/** The three backgrounds a theme can carry, in the order they are shown. */
+type BackdropSlot = 'scripture' | 'song' | 'default';
+
+const SLOTS: { slot: BackdropSlot; label: string; hint: string }[] = [
+  { slot: 'scripture', label: 'Scripture', hint: 'Behind Bible verses' },
+  { slot: 'song', label: 'Songs', hint: 'Behind song lyrics' },
+  { slot: 'default', label: 'Everything else', hint: 'Sermons, slides, announcements' },
+];
 import { useApp } from '../stores/app';
 
 const FONTS = [
@@ -34,8 +44,12 @@ export function ThemePanel() {
   const live = useApp((s) => s.live);
   const toast = useApp((s) => s.toast);
   const [theme, setTheme] = useState<Theme | null>(null);
+  const [library, setLibrary] = useState<MediaItem[]>([]);
+  /** Which backdrop slot the media picker is choosing for. */
+  const [picking, setPicking] = useState<BackdropSlot | null>(null);
 
   useEffect(() => { api.themes.active().then(setTheme).catch(() => {}); }, []);
+  useEffect(() => { api.media.all().then(setLibrary).catch(() => {}); }, []);
   // Keep in step when another surface changes the theme.
   useEffect(() => { if (live?.theme) setTheme(live.theme); }, [live?.theme]);
 
@@ -47,6 +61,26 @@ export function ThemePanel() {
     try { await api.themes.save(next); }
     catch (err) { toast(err instanceof Error ? err.message : String(err), 'error'); }
   }, [theme, toast]);
+
+  /** Replace one backdrop slot, or clear it with null. */
+  const setBackdrop = useCallback(async (slot: BackdropSlot, value: Backdrop | null) => {
+    if (!theme) return;
+    await patch({ backdrops: { ...theme.backdrops, [slot]: value } });
+  }, [theme, patch]);
+
+  const choose = useCallback(async (slot: BackdropSlot, item: MediaItem) => {
+    const existing = theme?.backdrops?.[slot];
+    await setBackdrop(slot, {
+      file: item.file,
+      kind: item.kind,
+      // Keep the look already dialled in when swapping the picture itself.
+      fit: existing?.fit ?? 'cover',
+      opacity: existing?.opacity ?? 1,
+      dim: existing?.dim ?? 0.35,
+      blur: existing?.blur ?? 0,
+    });
+    setPicking(null);
+  }, [theme, setBackdrop]);
 
   if (!theme) return <div className="panel"><div className="panel-head"><h2 className="panel-title">Theme</h2></div></div>;
 
@@ -107,6 +141,95 @@ export function ThemePanel() {
             <input type="range" min={0} max={360} value={bg.angle}
               onChange={(e) => void patch({ background: { ...bg, angle: Number(e.target.value) } })} />
           </div>
+        </div>
+
+        <div className="settings-group">
+          <span className="section-label">Backgrounds</span>
+          <p className="field-hint" style={{ marginBottom: 'var(--sp-3)' }}>
+            A still or motion loop behind the words, chosen separately for scripture and
+            songs. Media sent for one particular item still takes precedence over these.
+          </p>
+
+          {SLOTS.map(({ slot, label, hint }) => {
+            const b = theme.backdrops?.[slot] ?? null;
+            const item = b ? library.find((m) => m.file === b.file) : null;
+            return (
+              <div className="card" key={slot} style={{ marginBottom: 'var(--sp-3)' }}>
+                <div className="row">
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div className="list-title">{label}</div>
+                    <div className="list-sub truncate">
+                      {b ? `${item?.name ?? 'Chosen file'} · ${b.kind}` : hint}
+                    </div>
+                  </div>
+                  {b && (
+                    <button className="btn sm ghost" onClick={() => void setBackdrop(slot, null)}>
+                      Clear
+                    </button>
+                  )}
+                  <button
+                    className={`btn sm ${b ? '' : 'primary'}`}
+                    onClick={() => setPicking(picking === slot ? null : slot)}
+                  >
+                    {b ? 'Change' : 'Choose'}
+                  </button>
+                </div>
+
+                {b && (
+                  <>
+                    <div className="field-row" style={{ marginTop: 'var(--sp-3)' }}>
+                      <div className="field">
+                        <span className="field-label">Dim — {Math.round(b.dim * 100)}%</span>
+                        <input
+                          type="range" min={0} max={90} value={Math.round(b.dim * 100)}
+                          onChange={(e) => void setBackdrop(slot, { ...b, dim: Number(e.target.value) / 100 })}
+                        />
+                      </div>
+                      <div className="field">
+                        <span className="field-label">Blur — {b.blur}px</span>
+                        <input
+                          type="range" min={0} max={24} value={b.blur}
+                          onChange={(e) => void setBackdrop(slot, { ...b, blur: Number(e.target.value) })}
+                        />
+                      </div>
+                    </div>
+                    <span className="field-hint">
+                      Dim darkens the picture so white text stays readable over it.
+                    </span>
+                  </>
+                )}
+
+                {picking === slot && (
+                  <div style={{ marginTop: 'var(--sp-3)' }}>
+                    {library.length === 0 ? (
+                      <span className="field-hint">
+                        Nothing in your media library yet — add images or loops in the Media tab first.
+                      </span>
+                    ) : (
+                      <div className="backdrop-grid">
+                        {library.map((m) => (
+                          <button
+                            key={m.id}
+                            className={`backdrop-tile ${b?.file === m.file ? 'chosen' : ''}`}
+                            onClick={() => void choose(slot, m)}
+                            title={m.name}
+                          >
+                            {m.kind === 'video' ? (
+                              <video src={fileUrl(m.file)} muted playsInline preload="metadata" />
+                            ) : (
+                              <img src={fileUrl(m.file)} alt="" />
+                            )}
+                            <span className="backdrop-name truncate">{m.name}</span>
+                            {m.kind === 'video' && <span className="backdrop-badge">MOTION</span>}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            );
+          })}
         </div>
 
         <div className="settings-group">

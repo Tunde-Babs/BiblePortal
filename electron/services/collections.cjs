@@ -76,6 +76,25 @@ class CollectionService {
   }
 
   /** Drop a deleted song from every collection that referenced it. */
+  /**
+   * Drop many songs from every collection in one save.
+   *
+   * The single-song purge rewrites the whole collections file each call, so a
+   * bulk delete would rewrite it once per song. This does it once.
+   */
+  async purgeSongs(songIds) {
+    const doomed = new Set(songIds ?? []);
+    if (!doomed.size) return { ok: true, changed: false };
+    const collections = await this.all();
+    let changed = false;
+    for (const c of collections) {
+      const next = c.songIds.filter((s) => !doomed.has(s));
+      if (next.length !== c.songIds.length) { c.songIds = next; changed = true; }
+    }
+    if (changed) await this.saveAll(collections);
+    return { ok: true, changed };
+  }
+
   async purgeSong(songId) {
     const collections = await this.all();
     let changed = false;

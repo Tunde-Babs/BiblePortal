@@ -11,7 +11,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { api, type SmartResult, type Suggestion, type OnlineBible } from '../../shared/api';
 import type { Verse } from '../../shared/types';
-import { scriptureDeck, useApp } from '../stores/app';
+import { proseDeck, scriptureDeck, useApp } from '../stores/app';
 import { IconSearch } from '../components/Icons';
 
 /** Wrap highlight ranges in <mark> without risking HTML injection. */
@@ -44,12 +44,15 @@ export function BiblePanel() {
   /** Licensed translations the operator has enabled, shown alongside bundled ones. */
   const [online, setOnline] = useState<OnlineBible[]>([]);
   const [copyright, setCopyright] = useState('');
+  /** Set when the active result came from a paragraphed translation. */
+  const [prose, setProse] = useState<{ label: string; text: string; abbr: string } | null>(null);
   const [highlight, setHighlight] = useState(0);
   const [showSuggestions, setShowSuggestions] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
   const activeTranslation = translation || settings?.general.defaultTranslation || translations[0]?.id || '';
   const versesPerSlide = settings?.presentation.versesPerSlide ?? 2;
+  const maxLines = settings?.presentation.maxLinesPerSlide ?? 4;
 
   useEffect(() => { inputRef.current?.focus(); }, []);
 
@@ -106,6 +109,9 @@ export function BiblePanel() {
       const run = isOnline
         ? api.online.lookup(activeTranslation, q).then((hit) => {
             setCopyright(hit.copyright ?? '');
+            setProse(hit.paragraph
+              ? { label: hit.label, text: hit.verses.map((v) => v.text).join(' '), abbr: hit.translationAbbr }
+              : null);
             return {
               kind: 'reference' as const,
               query: q,
@@ -122,7 +128,7 @@ export function BiblePanel() {
             } as unknown as SmartResult;
           })
         : api.bible.smart(q, { translation: activeTranslation, limit: 80 })
-            .then((res) => { setCopyright(''); return res; });
+            .then((res) => { setCopyright(''); setProse(null); return res; });
 
       run
         .then((res) => { if (!cancelled) setResult(res); })
@@ -135,10 +141,12 @@ export function BiblePanel() {
 
   /** Stage a passage (whole reference result, or one verse from a text search). */
   const stage = useCallback(async (label: string, verses: Verse[], abbr: string, take = false) => {
-    const deck = scriptureDeck(label, verses, abbr, versesPerSlide);
+    const deck = prose && prose.label === label
+      ? await proseDeck(prose.label, prose.text, prose.abbr, maxLines)
+      : scriptureDeck(label, verses, abbr, versesPerSlide);
     if (take) await previewAndTake(deck); else await preview(deck);
     setSelected(label);
-  }, [preview, previewAndTake, versesPerSlide]);
+  }, [preview, previewAndTake, versesPerSlide, maxLines, prose]);
 
   /** Stage one verse found by text search. */
   const stageVerse = useCallback(async (verse: Verse, abbr: string, take = false) => {

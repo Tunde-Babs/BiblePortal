@@ -157,6 +157,36 @@ export function backgroundMeta(kind: 'scripture' | 'song' | 'slide'): Record<str
   return { mediaId: item.id, mediaFile: item.file, mediaKind: item.kind };
 }
 
+/**
+ * Build a deck from a paragraphed translation.
+ *
+ * The passage arrives undivided, so slides are cut on sentence boundaries and
+ * every slide carries the whole reference — inventing verse numbers a
+ * paragraphed translation does not have would misattribute the text.
+ */
+export async function proseDeck(
+  label: string,
+  text: string,
+  translationAbbr: string,
+  maxLines: number,
+): Promise<Partial<Deck>> {
+  // Chunking lives in the main process so there is one implementation with
+  // tests against it, rather than a renderer copy that drifts.
+  const chunks = await api.bible.chunkProse(text, maxLines).catch(() => [] as string[][]);
+  const slides: Slide[] = chunks.map((lines, i) => ({
+    id: `p_${i}`,
+    lines,
+    caption: label,
+  }));
+  return {
+    kind: 'scripture',
+    title: `${label} · ${translationAbbr}`,
+    slides: slides.length ? slides : [{ id: 'p_0', lines: [text], caption: label }],
+    index: 0,
+    meta: { translationAbbr, ...backgroundMeta('scripture') },
+  };
+}
+
 /** Build a scripture deck from a lookup result. */
 export function scriptureDeck(
   label: string,

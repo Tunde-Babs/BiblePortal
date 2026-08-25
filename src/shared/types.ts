@@ -129,6 +129,25 @@ export interface Plan {
   updatedAt: string;
 }
 
+/**
+ * A still or motion background behind the words.
+ *
+ * `dim` and `blur` are not decoration: a photograph busy enough to be worth
+ * showing is usually busy enough to make white text unreadable, and darkening
+ * or softening it is what makes the two coexist.
+ */
+export interface Backdrop {
+  file: string;
+  kind: 'image' | 'video';
+  fit: 'cover' | 'contain';
+  /** 0–1, how strongly the media shows over the theme's base colour. */
+  opacity: number;
+  /** 0–1 black scrim laid over the media, for text legibility. */
+  dim: number;
+  /** Gaussian blur in stage pixels. */
+  blur: number;
+}
+
 export interface MediaItem {
   id: string;
   kind: 'image' | 'video';
@@ -192,6 +211,16 @@ export interface Theme {
     angle: number;
     image: string | null;
     opacity: number;
+  };
+  /**
+   * Backgrounds chosen per kind of content, so scripture and songs can look
+   * different without swapping themes mid-service. `null` falls through to
+   * `default`, and `default` falls through to the base `background` above.
+   */
+  backdrops: {
+    default: Backdrop | null;
+    scripture: Backdrop | null;
+    song: Backdrop | null;
   };
   text: {
     fontFamily: string;
@@ -328,6 +357,7 @@ declare global {
       presentations: Record<string, (...args: never[]) => Promise<never>>;
       sermons: Record<string, (...args: never[]) => Promise<never>>;
       online: Record<string, (...args: never[]) => Promise<never>>;
+      outputServer: Record<string, (...args: never[]) => Promise<never>>;
       app: Record<string, (...args: never[]) => Promise<never>>;
       on: (event: string, handler: (payload: never) => void) => () => void;
       EVENTS: Record<string, string>;

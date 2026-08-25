@@ -4,12 +4,15 @@
 const INVOKE = [
   // bible
   'bible:manifest', 'bible:lookup', 'bible:chapter', 'bible:search', 'bible:smart', 'bible:suggest',
-  'bible:parallel', 'bible:books', 'bible:strongs', 'bible:lexiconSearch', 'bible:stats',
+  'bible:parallel', 'bible:books', 'bible:strongs', 'bible:lexiconSearch', 'bible:stats', 'bible:chunkProse',
   // translations
   'translations:catalogue', 'translations:install', 'translations:import',
   'translations:inspect', 'translations:remove', 'translations:pickModule',
   // songs
   'songs:all', 'songs:get', 'songs:search', 'songs:upsert', 'songs:remove',
+  'songs:removeMany', 'songs:removeAll',
+  'app:confirm',
+  'outputServer:status', 'outputServer:start', 'outputServer:stop',
   'songs:import', 'songs:importText', 'songs:export', 'songs:slides',
   'songs:markUsed', 'songs:stats', 'songs:pickFiles', 'songs:splitStanzas',
   // plans
@@ -47,6 +50,8 @@ const INVOKE = [
   'online:cacheSize', 'online:clearCache', 'online:diagnose',
   // EasyWorship migration
   'ew:pickFile', 'ew:pickFolder', 'ew:inspect', 'ew:importSchedule', 'ew:importFolder',
+  'ew:pickProfile', 'ew:inspectProfile', 'ew:importProfile',
+  'ew:importProfileMedia', 'ew:countImported', 'ew:removeImported',
   // app
   'app:info', 'app:setDirty', 'app:quit', 'app:diag', 'app:backup', 'app:restore', 'app:openPath', 'app:revealDataFolder',
 ];

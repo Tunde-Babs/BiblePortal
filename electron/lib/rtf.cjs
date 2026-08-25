@@ -20,6 +20,9 @@ const SKIP_DESTINATIONS = new Set([
   'colorschememapping', 'latentstyles', 'datastore', 'generator', 'listtable',
   'listoverridetable', 'rsidtbl', 'xmlnstbl', 'filetbl', 'header', 'footer',
   'footnote', 'annotation', 'nonshppict', 'shppict', 'shpinst', 'bkmkstart', 'bkmkend',
+  // Paragraph-numbering definitions carry literal punctuation as their
+  // before/after text, which must never reach a slide.
+  'pnseclvl', 'pntext', 'pntxtb', 'pntxta', 'pn', 'ls', 'listtext',
 ]);
 
 /**
@@ -54,6 +57,17 @@ function rtfToText(rtf) {
     if (ch === '\\') {
       // Escaped literal characters.
       const next = src[i + 1];
+
+      // `{\*\foo ...}` marks an ignorable destination: the RTF spec says a
+      // reader that does not understand it must skip the entire group. Without
+      // this, groups like `\pnseclvl` (paragraph numbering) leak their literal
+      // punctuation into the text — the source of stray brackets on import.
+      if (next === '*') {
+        if (skipDepth < 0) skipDepth = depth;
+        i += 2;
+        continue;
+      }
+
       if (next === '\\' || next === '{' || next === '}') {
         if (skipDepth < 0) out += next;
         i += 2;
@@ -95,9 +109,6 @@ function rtfToText(rtf) {
       // Every other control word is formatting we intentionally drop.
       continue;
     }
-
-    // Ignore an ignorable-destination marker.
-    if (ch === '*' && src[i - 1] === '\\') { i++; continue; }
 
     if (skipDepth < 0) {
       if (skipChars && ch !== '\n' && ch !== '\r') { skipChars--; i++; continue; }

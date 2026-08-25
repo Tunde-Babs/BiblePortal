@@ -85,6 +85,30 @@ class SongService {
     return { removed: songs.length - next.length };
   }
 
+  /**
+   * Remove many songs in one pass.
+   *
+   * Calling remove() in a loop would re-read and re-write the whole library
+   * once per song — for a large clear-out that is thousands of full saves and
+   * leaves the library half-deleted if it is interrupted partway. One read and
+   * one atomic save keeps it fast and all-or-nothing.
+   */
+  async removeMany(ids) {
+    const doomed = new Set(ids ?? []);
+    if (!doomed.size) return { removed: 0, remaining: (await this.all()).length };
+    const songs = await this.all();
+    const next = songs.filter((s) => !doomed.has(s.id));
+    await this.save(next);
+    return { removed: songs.length - next.length, remaining: next.length };
+  }
+
+  /** Empty the library outright. Returns the count so the UI can report it. */
+  async removeAll() {
+    const songs = await this.all();
+    await this.save([]);
+    return { removed: songs.length, remaining: 0 };
+  }
+
   /** Record that a song was used in a service — drives "recent" and "most used". */
   async markUsed(id) {
     const songs = await this.all();

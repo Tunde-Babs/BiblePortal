@@ -12,6 +12,7 @@ const fsp = require('node:fs/promises');
 const { app, BrowserWindow, ipcMain, dialog, shell, screen, Menu, globalShortcut, session } = require('electron');
 
 const { Store } = require('./services/store.cjs');
+const { OutputServer } = require('./services/output-server.cjs');
 const { BibleService } = require('./services/bible.cjs');
 const { TranslationService } = require('./services/translations.cjs');
 const { SongService } = require('./services/songs.cjs');
@@ -30,6 +31,7 @@ const { WindowManager, isDev } = require('./windows.cjs');
 const { EVENTS } = require('./ipc-channels.cjs');
 const canon = require('./lib/canon.cjs');
 const reference = require('./lib/reference.cjs');
+const prose = require('./lib/prose.cjs');
 const songFormat = require('./lib/song-format.cjs');
 const chords = require('./lib/chords.cjs');
 
@@ -85,6 +87,13 @@ async function bootstrap() {
   ctx.media = new MediaService({ store: ctx.store, mediaDir: path.join(userData, 'media') });
   ctx.schedules = new ScheduleFileService({ store: ctx.store, documentsDir: app.getPath('documents') });
   ctx.collections = new CollectionService(ctx.store);
+  ctx.outputServer = new OutputServer({
+    rootDir: () => path.join(__dirname, '..', 'dist'),
+    // Media may only be served from the folders we actually keep media in.
+    mediaRoots: () => [path.join(userData, 'media'), path.join(userData, 'themes')],
+    getState: () => ctx.live.get(),
+    devUrl: process.env.BP_DEV === '1' ? 'http://localhost:5273' : '',
+  });
   ctx.ew = new EasyWorshipImportService({ songs: ctx.songs, media: ctx.media, plans: ctx.plans });
   ctx.presentations = new PresentationService({ store: ctx.store, mediaDir: path.join(userData, 'media') });
   ctx.sermons = new SermonService(ctx.store);
@@ -95,7 +104,10 @@ async function bootstrap() {
   ctx.windows = new WindowManager();
 
   // Any live change fans out to every window immediately.
-  ctx.live.on('change', (state) => ctx.windows.broadcast(EVENTS.LIVE_CHANGED, state));
+  ctx.live.on('change', (state) => {
+    ctx.windows.broadcast(EVENTS.LIVE_CHANGED, state);
+    ctx.outputServer.broadcast(state);
+  });
 
   // Warm the default translation's index in the background so the first search
   // is instant without delaying startup.
@@ -129,6 +141,10 @@ function registerHandlers() {
   handle('bible:strongs', (code) => ctx.bible.strongs(code));
   handle('bible:lexiconSearch', async (q, limit) => ({ ok: true, results: await ctx.bible.lexiconSearch(q, limit) }));
   handle('bible:stats', async () => ({ ok: true, ...ctx.bible.stats() }));
+  handle('bible:chunkProse', async (text, maxLines) => {
+    const chunks = prose.chunkProse(text);
+    return { ok: true, chunks: chunks.map((c) => prose.toLines(c, maxLines ?? 4)) };
+  });
 
   // ----------------------------------------------------------- translations
   handle('translations:catalogue', async () => ({ ok: true, ...(await ctx.translations.catalogue()) }));
@@ -182,6 +198,54 @@ function registerHandlers() {
   handle('songs:remove', async (id) => {
     const result = await ctx.songs.remove(id);
     await ctx.collections.purgeSong(id);
+    return { ok: true, ...result };
+  });
+  /**
+   * A real modal for destructive actions. A toast can be missed; deleting a
+   * library cannot be undone, so it gets a blocking confirmation with the
+   * destructive button never the default.
+   */
+  handle('app:confirm', async ({ title, message, detail, confirmLabel }) => {
+    const res = await dialog.showMessageBox(ctx.windows.console, {
+      type: 'warning',
+      buttons: [confirmLabel || 'Delete', 'Cancel'],
+      defaultId: 1,
+      cancelId: 1,
+      title: title || 'Are you sure?',
+      message: message || '',
+      detail: detail || '',
+    });
+    return { ok: true, confirmed: res.response === 0 };
+  });
+
+  // ------------------------------------------------ output server (for OBS)
+  handle('outputServer:status', () => ({ ok: true, ...ctx.outputServer.status() }));
+  handle('outputServer:start', async ({ port, allowLan } = {}) => {
+    const settings = await ctx.settings.get();
+    const cfg = {
+      port: port ?? settings.outputServer?.port ?? 7373,
+      allowLan: allowLan ?? settings.outputServer?.allowLan ?? false,
+    };
+    const status = await ctx.outputServer.start(cfg);
+    await ctx.settings.patch({ outputServer: { ...cfg, enabled: true } });
+    return { ok: true, ...status };
+  });
+  handle('outputServer:stop', async () => {
+    await ctx.outputServer.stop();
+    const settings = await ctx.settings.get();
+    await ctx.settings.patch({ outputServer: { ...settings.outputServer, enabled: false } });
+    return { ok: true, ...ctx.outputServer.status() };
+  });
+
+  handle('songs:removeMany', async (ids) => {
+    const result = await ctx.songs.removeMany(ids);
+    await ctx.collections.purgeSongs(ids);
+    return { ok: true, ...result };
+  });
+  handle('songs:removeAll', async () => {
+    const all = await ctx.songs.all();
+    const result = await ctx.songs.removeAll();
+    await ctx.collections.purgeSongs(all.map((s) => s.id));
     return { ok: true, ...result };
   });
   handle('songs:markUsed', async (id) => ({ ok: true, song: await ctx.songs.markUsed(id) }));
@@ -515,6 +579,39 @@ function registerHandlers() {
 
   handle('ew:inspect', async (filePath) => ctx.ew.inspect(await assertReadableFile(filePath)));
 
+  handle('ew:pickProfile', async () => {
+    const res = await dialog.showOpenDialog(ctx.windows.console, {
+      title: 'Import an EasyWorship song library',
+      message: 'Select the EasyWorship profile folder — the one containing "Databases".',
+      properties: ['openDirectory'],
+    });
+    return { ok: !res.canceled, path: res.filePaths?.[0] ?? null };
+  });
+
+  handle('ew:inspectProfile', (dir) => ctx.ew.inspectProfile(String(dir ?? '')));
+  handle('ew:countImported', () => ctx.ew.countImported());
+
+  handle('ew:removeImported', async () => {
+    const result = await ctx.ew.removeImported();
+    await ctx.collections.purgeSongs(result.ids ?? []);
+    ctx.windows.broadcast(EVENTS.LIBRARY_CHANGED, { kind: 'songs' });
+    return result;
+  });
+
+  handle('ew:importProfileMedia', async (dir) => {
+    const result = await ctx.ew.importProfileMedia(String(dir ?? ''), (p) =>
+      ctx.windows.broadcast(EVENTS.TRANSLATION_PROGRESS, { id: 'easyworship', ...p }));
+    ctx.windows.broadcast(EVENTS.LIBRARY_CHANGED, { kind: 'media' });
+    return result;
+  });
+
+  handle('ew:importProfile', async (dir, opts) => {
+    const result = await ctx.ew.importProfile(String(dir ?? ''), opts, (p) =>
+      ctx.windows.broadcast(EVENTS.TRANSLATION_PROGRESS, { id: 'easyworship', ...p }));
+    ctx.windows.broadcast(EVENTS.LIBRARY_CHANGED, { kind: 'songs' });
+    return result;
+  });
+
   handle('ew:importSchedule', async (filePath, what) => {
     const result = await ctx.ew.importSchedule(await assertReadableFile(filePath), what);
     ctx.windows.broadcast(EVENTS.LIBRARY_CHANGED, { kind: 'all' });
@@ -758,6 +855,17 @@ app.whenReady().then(async () => {
   });
 
   ctx.windows.createConsole();
+
+  // Bring the output server back up if it was left on, so a machine set up on
+  // Saturday is still feeding OBS on Sunday without anyone touching it.
+  if (startupSettings.outputServer?.enabled) {
+    try {
+      await ctx.outputServer.start(startupSettings.outputServer);
+    } catch (err) {
+      // A taken port must not stop the app from opening.
+      console.error('[main] output server did not start:', err.message);
+    }
+  }
 
   screen.on('display-added', () => ctx.windows.broadcast(EVENTS.DISPLAYS_CHANGED, ctx.windows.displays()));
   screen.on('display-removed', () => ctx.windows.broadcast(EVENTS.DISPLAYS_CHANGED, ctx.windows.displays()));

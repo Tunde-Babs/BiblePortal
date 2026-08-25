@@ -9,7 +9,7 @@ starts.
 
 ![macOS](https://img.shields.io/badge/macOS-Apple%20Silicon-black)
 ![Licence](https://img.shields.io/badge/licence-GPL--3.0-blue)
-![Tests](https://img.shields.io/badge/checks-293%20passing-brightgreen)
+![Tests](https://img.shields.io/badge/checks-331%20passing-brightgreen)
 ![Offline](https://img.shields.io/badge/offline-no%20account%2C%20no%20telemetry-informational)
 
 ---
@@ -25,6 +25,7 @@ starts.
 | **Presentations** | Import `.pptx` announcement decks. Text, bullets, pictures and speaker notes come across and render through your service theme. |
 | **Live output** | Preview/program split with a hard **take** step. Audience display, stage confidence monitor, blackout, clear and logo. |
 | **Backgrounds** | Assign a still or motion loop per content type — one behind scripture, another behind lyrics. |
+| **Stream to OBS** | Serve the audience output to OBS on the same machine as a Browser Source. OBS draws the page itself, so there is no video encoding, no generation loss and no drift — and the alignment pattern tells you instantly whether OBS is cropping. |
 | **Theme designer** | Typography, colour, reference styling. Every control writes through live; there is no "apply" step to forget. |
 | **Word study** | Strong's Hebrew and Greek — 14,298 public-domain entries — plus topical search and passage outlines. |
 | **Live detection** | Whisper running locally transcribes the room and cues the verse the speaker named or quoted. |
@@ -145,7 +146,7 @@ ask for a right-click → Open on first launch.
 ## Verifying your install
 
 ```bash
-npm test             # typecheck + 293 unit checks + production build
+npm test             # typecheck + 331 unit checks + production build
 npm run smoke        # boots the app and drives the live pipeline
 npm run smoke:asr    # speech model load, local ONNX, real audio decode
 npm run bench:asr    # measures cue latency

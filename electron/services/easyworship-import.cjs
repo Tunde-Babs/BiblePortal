@@ -12,6 +12,9 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 
 const ew = require('../lib/easyworship.cjs');
+const paradox = require('../lib/paradox.cjs');
+const { rtfToText } = require('../lib/rtf.cjs');
+const songFormat = require('../lib/song-format.cjs');
 
 class EasyWorshipImportService {
   /**
@@ -147,6 +150,218 @@ class EasyWorshipImportService {
     }
 
     return { ok: true, ...imported, plan };
+  }
+
+  /**
+   * Locate the song table inside an EasyWorship profile folder.
+   *
+   * A profile can be handed over in several shapes — the profile root, its
+   * "… Data" folder, or the Databases folder itself — so accept any of them
+   * rather than making the operator find the exact directory.
+   */
+  async findSongTable(dir) {
+    const candidates = [
+      path.join(dir, 'Databases', 'Data', 'Songs.DB'),
+      path.join(dir, 'Data', 'Songs.DB'),
+      path.join(dir, 'Songs.DB'),
+    ];
+    for (const candidate of candidates) {
+      try { await fsp.access(candidate); return candidate; } catch { /* keep looking */ }
+    }
+
+    // Fall back to a bounded search, so a slightly different layout still works.
+    const stack = [dir];
+    let visited = 0;
+    while (stack.length && visited < 400) {
+      const current = stack.pop();
+      visited++;
+      let entries;
+      try { entries = await fsp.readdir(current, { withFileTypes: true }); } catch { continue; }
+      for (const entry of entries) {
+        const full = path.join(current, entry.name);
+        if (entry.isFile() && /^songs\.db$/i.test(entry.name)) return full;
+        // Skip the timestamped archives of superseded data.
+        if (entry.isDirectory() && !/^oldData/i.test(entry.name)) stack.push(full);
+      }
+    }
+    return null;
+  }
+
+  /** Read a profile's song library without importing, so the UI can confirm. */
+  async inspectProfile(dir) {
+    const table = await this.findSongTable(dir);
+    if (!table) {
+      throw new Error('No song library found. Choose the EasyWorship profile folder — the one containing "Databases".');
+    }
+    const info = await paradox.inspect(table);
+    return {
+      ok: true,
+      table,
+      folder: path.basename(dir),
+      songs: info.records,
+      memoMB: Math.round(info.memoBytes / 1048576),
+      fields: info.fields.filter((f) => /title|author|copyright|words|number/i.test(f.name)).map((f) => f.name),
+    };
+  }
+
+  /**
+   * Import a whole EasyWorship song library from its Paradox tables.
+   *
+   * Lyrics are stored as RTF, so each is decoded and then split into stanzas on
+   * blank lines — the same rule the editor uses, so an imported song is
+   * indistinguishable from one written here.
+   */
+  async importProfile(dir, opts = {}, onProgress = null) {
+    const table = await this.findSongTable(dir);
+    if (!table) {
+      throw new Error('No song library found. Choose the EasyWorship profile folder — the one containing "Databases".');
+    }
+
+    const { rows } = await paradox.readTable(table, {
+      limit: opts.limit ?? Infinity,
+      onProgress: (done, total) => onProgress?.({ stage: 'read', done, total }),
+    });
+
+    const existing = await this.songs.all();
+    const seen = new Set(existing.map((s) => s.title.trim().toLowerCase()));
+    const result = { total: rows.length, imported: 0, skipped: 0, empty: 0, errors: [] };
+
+    for (const [i, row] of rows.entries()) {
+      const title = String(row.Title ?? '').trim();
+      if (!title) { result.empty++; continue; }
+
+      const key = title.toLowerCase();
+      // Re-running an import must not duplicate a library.
+      if (seen.has(key)) { result.skipped++; continue; }
+
+      const words = rtfToText(String(row.Words ?? ''));
+      if (!words.trim()) { result.empty++; continue; }
+
+      try {
+        const sections = songFormat.splitStanzas(words);
+        if (!sections.length) { result.empty++; continue; }
+
+        await this.songs.upsert({
+          title,
+          author: String(row.Author ?? '').trim(),
+          copyright: String(row.Copyright ?? '').trim(),
+          ccli: String(row['Song Number'] ?? '').trim(),
+          sections,
+          arrangement: sections.map((x) => x.id),
+          notes: 'Imported from EasyWorship',
+        });
+        seen.add(key);
+        result.imported++;
+      } catch (err) {
+        result.errors.push(`${title}: ${err.message}`);
+      }
+
+      if (i % 25 === 0) onProgress?.({ stage: 'import', done: i, total: rows.length });
+    }
+
+    return { ok: true, ...result };
+  }
+
+  /**
+   * Remove every song this importer brought in.
+   *
+   * Imported songs carry a note identifying their origin, so a bad import can
+   * be undone in one step rather than deleted song by song. Songs written or
+   * imported by other means are untouched.
+   */
+  async removeImported(marker = 'Imported from EasyWorship') {
+    const all = await this.songs.all();
+    const doomed = all.filter((s) => (s.notes ?? '').includes(marker));
+    if (!doomed.length) return { ok: true, removed: 0, remaining: all.length, ids: [] };
+
+    const keep = all.filter((s) => !(s.notes ?? '').includes(marker));
+    await this.songs.save(keep);
+    // The ids go back so the caller can clear them out of any collection the
+    // user filed them into after importing.
+    return { ok: true, removed: doomed.length, remaining: keep.length, ids: doomed.map((s) => s.id) };
+  }
+
+  /** Count what a removal would take, so the UI can confirm before acting. */
+  async countImported(marker = 'Imported from EasyWorship') {
+    const all = await this.songs.all();
+    return { ok: true, count: all.filter((s) => (s.notes ?? '').includes(marker)).length, total: all.length };
+  }
+
+  /**
+   * Copy an EasyWorship profile's media into the library.
+   *
+   * Images and video sit as ordinary files under Resources, so they are copied
+   * rather than extracted — far more reliable than pulling blobs out of the
+   * Paradox tables, and it preserves the originals untouched.
+   */
+  async importProfileMedia(dir, onProgress = null) {
+    const roots = ['Resources/Images', 'Resources/Videos', 'Resources/SharedMedia', 'Resources']
+      .map((r) => path.join(dir, r));
+
+    const MEDIA = /\.(jpe?g|png|gif|webp|bmp|mp4|mov|m4v|webm|mkv|wmv|avi)$/i;
+    const VIDEO = /\.(mp4|mov|m4v|webm|mkv|wmv|avi)$/i;
+
+    // Collect first so progress can be reported against a real total.
+    const found = new Map();
+    for (const root of roots) {
+      let entries;
+      try { entries = await fsp.readdir(root, { withFileTypes: true }); } catch { continue; }
+      for (const entry of entries) {
+        if (!entry.isFile() || !MEDIA.test(entry.name)) continue;
+        const full = path.join(root, entry.name);
+        // The same file can appear under more than one root; keep one copy.
+        if (!found.has(entry.name.toLowerCase())) found.set(entry.name.toLowerCase(), full);
+      }
+    }
+
+    const files = [...found.values()];
+    if (!files.length) return { ok: true, imported: 0, skipped: 0, bytes: 0, errors: [] };
+
+    await fsp.mkdir(this.media.mediaDir, { recursive: true });
+    const items = await this.media.all();
+    const known = new Set(items.map((m) => m.name.toLowerCase()));
+
+    const result = { total: files.length, imported: 0, skipped: 0, bytes: 0, errors: [] };
+
+    for (const [i, source] of files.entries()) {
+      const ext = path.extname(source).toLowerCase();
+      const name = path.basename(source, ext);
+
+      if (known.has(name.toLowerCase())) { result.skipped++; continue; }
+
+      try {
+        const stat = await fsp.stat(source);
+        const id = `m_${crypto.randomBytes(6).toString('hex')}`;
+        const dest = path.join(this.media.mediaDir, `${id}${ext}`);
+        // copyFile streams internally, so a large video never lands in memory.
+        await fsp.copyFile(source, dest);
+
+        const isVideo = VIDEO.test(ext);
+        items.push({
+          id,
+          kind: isVideo ? 'video' : 'image',
+          name,
+          file: dest,
+          ext,
+          bytes: stat.size,
+          addedAt: new Date().toISOString(),
+          loop: isVideo,
+          muted: true,
+          role: 'background',
+          tags: ['easyworship'],
+        });
+        known.add(name.toLowerCase());
+        result.imported++;
+        result.bytes += stat.size;
+      } catch (err) {
+        result.errors.push(`${path.basename(source)}: ${err.message}`);
+      }
+
+      if (i % 10 === 0) onProgress?.({ stage: 'media', done: i, total: files.length });
+    }
+
+    await this.media.store.write('media', { format: 'bibleportal.media/1', items });
+    return { ok: true, ...result };
   }
 
   /**

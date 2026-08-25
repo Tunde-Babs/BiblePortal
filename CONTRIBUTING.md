@@ -15,7 +15,7 @@ if a process is left behind.
 ## Before you push
 
 ```bash
-npm test             # typecheck + 293 unit checks + production build
+npm test             # typecheck + 331 unit checks + production build
 npm run smoke        # boots the app and drives the live pipeline
 npm run smoke:asr    # speech model load, local ONNX, detection
 ```

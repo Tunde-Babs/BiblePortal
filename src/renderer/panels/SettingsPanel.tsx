@@ -10,7 +10,7 @@ import { useCallback, useEffect, useState } from 'react';
 
 import { api } from '../../shared/api';
 import type { CatalogueGroup, TranslationInfo } from '../../shared/types';
-import type { EwInspection, OnlineBible, OnlineConfig } from '../../shared/api';
+import type { EwInspection, EwProfile, OnlineBible, OnlineConfig } from '../../shared/api';
 import { useApp } from '../stores/app';
 import { IconImport, IconTrash, IconCheck } from '../components/Icons';
 
@@ -36,6 +36,9 @@ export function SettingsPanel() {
   const [ewFile, setEwFile] = useState<string | null>(null);
   const [ewLook, setEwLook] = useState<EwInspection | null>(null);
   const [ewBusy, setEwBusy] = useState(false);
+  const [profile, setProfile] = useState<{ dir: string; info: EwProfile } | null>(null);
+  const [profileProgress, setProfileProgress] = useState<string>('');
+  const [importedCount, setImportedCount] = useState<number | null>(null);
 
   // Licensed translations reached under the user's own API.Bible key.
   const [online, setOnline] = useState<OnlineConfig | null>(null);
@@ -174,6 +177,86 @@ export function SettingsPanel() {
       toast(err instanceof Error ? err.message : String(err), 'error');
     } finally { setEwBusy(false); }
   }, [toast]);
+
+  /** Point at an EasyWorship profile and report what its library holds. */
+  const pickProfile = useCallback(async () => {
+    try {
+      const picked = await api.ew.pickProfile();
+      if (!picked.path) return;
+      setEwBusy(true);
+      const info = await api.ew.inspectProfile(picked.path);
+      setProfile({ dir: picked.path, info });
+    } catch (err) {
+      setProfile(null);
+      toast(err instanceof Error ? err.message : String(err), 'error');
+    } finally { setEwBusy(false); }
+  }, [toast]);
+
+  const runProfileImport = useCallback(async () => {
+    if (!profile) return;
+    setEwBusy(true);
+    setProfileProgress('Reading the song table…');
+    try {
+      const res = await api.ew.importProfile(profile.dir);
+      toast(
+        `Imported ${res.imported} song(s)`
+        + (res.skipped ? `, ${res.skipped} already in your library` : '')
+        + (res.empty ? `, ${res.empty} had no lyrics` : ''),
+        res.errors.length ? 'warn' : 'success',
+      );
+      setProfile(null);
+    } catch (err) {
+      toast(err instanceof Error ? err.message : String(err), 'error');
+    } finally { setEwBusy(false); setProfileProgress(''); }
+  }, [profile, toast]);
+
+  useEffect(() => {
+    const off = api.on(api.events().TRANSLATION_PROGRESS, (p: never) => {
+      const q = p as { id?: string; stage?: string; done?: number; total?: number };
+      if (q.id !== 'easyworship') return;
+      setProfileProgress(
+        q.stage === 'read'
+          ? `Reading songs… ${q.done ?? 0} of ${q.total ?? 0}`
+          : `Importing… ${q.done ?? 0} of ${q.total ?? 0}`,
+      );
+    });
+    return off;
+  }, []);
+
+  /** How many songs came from EasyWorship, so a removal can be confirmed. */
+  const refreshImportedCount = useCallback(async () => {
+    try { setImportedCount((await api.ew.countImported()).count); }
+    catch { setImportedCount(null); }
+  }, []);
+
+  useEffect(() => { if (tab === 'migrate') void refreshImportedCount(); }, [tab, refreshImportedCount]);
+
+  const removeImported = useCallback(async () => {
+    setEwBusy(true);
+    try {
+      const res = await api.ew.removeImported();
+      await refreshImportedCount();
+      toast(`Removed ${res.removed} imported song(s) · ${res.remaining} left in your library`, 'success');
+    } catch (err) {
+      toast(err instanceof Error ? err.message : String(err), 'error');
+    } finally { setEwBusy(false); }
+  }, [refreshImportedCount, toast]);
+
+  const importProfileMedia = useCallback(async () => {
+    if (!profile) return;
+    setEwBusy(true);
+    setProfileProgress('Copying media…');
+    try {
+      const res = await api.ew.importProfileMedia(profile.dir);
+      toast(
+        `Copied ${res.imported} media file(s), ${(res.bytes / 1048576).toFixed(0)} MB`
+        + (res.skipped ? `, ${res.skipped} already present` : ''),
+        res.errors.length ? 'warn' : 'success',
+      );
+    } catch (err) {
+      toast(err instanceof Error ? err.message : String(err), 'error');
+    } finally { setEwBusy(false); setProfileProgress(''); }
+  }, [profile, toast]);
 
   const backup = useCallback(async () => {
     try {
@@ -471,6 +554,65 @@ export function SettingsPanel() {
               (<span className="mono">.ewsx</span>) carries its songs and the backgrounds it uses.
               Everything is read on this computer — your songs stay yours and nothing is uploaded.
             </div>
+
+            <div className="settings-group">
+              <span className="section-label">Your whole song library</span>
+              <p className="field-hint" style={{ margin: 'var(--sp-3) 0' }}>
+                EasyWorship keeps its songs in a database rather than as files, and offers
+                no way to export them. Point at your profile folder — the one containing
+                <span className="mono"> Databases</span> — and the library is read directly.
+                Lyrics are stored as RTF and are decoded and split into stanzas on the way in.
+              </p>
+              <div className="row">
+                <button className="btn primary" onClick={() => void pickProfile()} disabled={ewBusy}>
+                  <IconImport size={12} /> Choose a profile folder…
+                </button>
+                {ewBusy && <div className="spinner" />}
+                {profileProgress && <span className="faint" style={{ fontSize: 'var(--fs-xs)' }}>{profileProgress}</span>}
+              </div>
+
+              {profile && (
+                <div className="card" style={{ marginTop: 'var(--sp-4)' }}>
+                  <div className="card-title">{profile.info.folder}</div>
+                  <div className="row" style={{ gap: 'var(--sp-2)', marginBottom: 'var(--sp-3)' }}>
+                    <span className="chip accent">{profile.info.songs.toLocaleString()} songs</span>
+                    <span className="chip">{profile.info.memoMB} MB of lyrics</span>
+                  </div>
+                  <div className="list-sub" style={{ marginBottom: 'var(--sp-3)' }}>
+                    Fields found: {profile.info.fields.join(', ')}
+                  </div>
+                  <div className="row">
+                    <button className="btn primary" onClick={() => void runProfileImport()} disabled={ewBusy}>
+                      Import {profile.info.songs.toLocaleString()} songs
+                    </button>
+                    <button className="btn" onClick={() => void importProfileMedia()} disabled={ewBusy}>
+                      Import media
+                    </button>
+                    <button className="btn ghost" onClick={() => setProfile(null)}>Cancel</button>
+                  </div>
+                  <span className="field-hint">
+                    Media is copied from the profile’s Resources folders — images, backgrounds
+                    and video — and filed under Media, tagged so you can find it again.
+                  </span>
+                  <span className="field-hint">
+                    Songs already in your library are skipped, so running this again is safe.
+                  </span>
+                </div>
+              )}
+            </div>
+
+            {!!importedCount && (
+              <div className="settings-group">
+                <span className="section-label">Undo an import</span>
+                <p className="field-hint" style={{ margin: 'var(--sp-3) 0' }}>
+                  {importedCount.toLocaleString()} song(s) in your library came from EasyWorship.
+                  Removing them leaves anything you wrote or imported another way untouched.
+                </p>
+                <button className="btn" onClick={() => void removeImported()} disabled={ewBusy}>
+                  <IconTrash size={12} /> Remove {importedCount.toLocaleString()} imported song(s)
+                </button>
+              </div>
+            )}
 
             <div className="settings-group">
               <span className="section-label">One schedule</span>

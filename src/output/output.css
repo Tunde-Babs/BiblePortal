@@ -3,6 +3,25 @@ body { -webkit-font-smoothing: antialiased; user-select: none; }
 
 .output-root { position: relative; width: 100vw; height: 100vh; background: #000; }
 
+/*
+ * Served to a browser (an OBS Browser Source) rather than shown on a projector.
+ *
+ * A projector's shape is a hardware fact and the window matches it, so the
+ * surface can fill. A Browser Source is a size typed into a form — it defaults
+ * to 800x600, and at that shape the background, which covers its box, quietly
+ * loses a quarter of its width. Bars are recoverable; cropped content is not,
+ * so the served page is locked to 16:9 and centred.
+ */
+body.served { display: grid; place-items: center; }
+/* #root sits between body and the stage and is a plain block, so centring the
+   body alone leaves the stage pinned to the top with all the bar at the
+   bottom. Centre here too, so a mis-sized source looks deliberate. */
+body.served #root { display: grid; place-items: center; width: 100%; }
+body.served .output-root {
+  width: min(100vw, calc(100vh * 16 / 9));
+  height: min(100vh, calc(100vw * 9 / 16));
+}
+
 /* Media fills the screen behind the slide surface, which is transparent
    wherever the theme background is not painted. */
 .output-media {

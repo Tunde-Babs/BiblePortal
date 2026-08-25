@@ -219,12 +219,14 @@ class OnlineBibleService {
    * @param {string} bibleId  API.Bible translation id
    * @param {string} input    free-text reference
    */
-  async lookup(bibleId, input) {
+  async lookup(bibleId, input, opts = {}) {
     const ref = reference.parseOne(input);
     if (!ref) return { ok: false, error: reference.explain(input) };
 
     const passageId = OnlineBibleService.passageId(ref);
-    const { cache } = await this.config();
+    const { cache: cacheEnabled } = await this.config();
+    // A diagnostic must exercise the parser, not replay a stored result.
+    const cache = cacheEnabled && !opts.fresh;
 
     if (cache) {
       const hit = await this._readCache(bibleId, passageId);
@@ -266,8 +268,16 @@ class OnlineBibleService {
       verses,
     };
 
-    // Structure only — never the text of a licensed translation.
-    this.lastShape = OnlineBibleService.describeShape(data, verses);
+    // Structure only, and carried on the payload it describes. Holding this on
+    // the service meant a cache hit returned early and reported whichever
+    // translation had last been fetched — one reading another's shape.
+    payload.shape = OnlineBibleService.describeShape(data, verses);
+    // A paragraphed translation returns the whole passage undivided. Flag it so
+    // slides are built on sentence boundaries rather than presenting a reading
+    // as one dense block, and so no verse numbers are invented for it.
+    payload.paragraph = payload.shape.markerStyle === 'none'
+      && verses.length === 1
+      && reference.countVerses(ref) > 1;
 
     if (cache) await this._writeCache(bibleId, passageId, payload);
     return payload;
@@ -302,14 +312,16 @@ class OnlineBibleService {
    * matches what a given translation actually returns.
    */
   async diagnose(bibleId, ref = 'John 3:16-18') {
-    const hit = await this.lookup(bibleId, ref);
+    const hit = await this.lookup(bibleId, ref, { fresh: true });
+    if (!hit.ok) return { ok: false, error: hit.error };
     return {
       ok: true,
       bibleId,
       reference: hit.label,
       abbr: hit.translationAbbr,
-      cached: !!hit.cached,
-      shape: this.lastShape ?? null,
+      cached: false,
+      // Read from this payload, so it can only describe this translation.
+      shape: hit.shape ?? null,
       // Lengths only, so a licensed text is never written down.
       verseLengths: (hit.verses ?? []).map((v) => v.text.length),
     };

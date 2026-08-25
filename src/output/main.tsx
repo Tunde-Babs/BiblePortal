@@ -23,6 +23,12 @@ function Output() {
   // The audience screen never shows a cursor.
   useEffect(() => { document.body.style.cursor = 'none'; }, []);
 
+  // No bridge means we are inside a Browser Source, where the viewport can be
+  // any shape. Mark the page so it letterboxes instead of cropping.
+  useEffect(() => {
+    if (!window.bp) document.body.classList.add('served');
+  }, []);
+
   const deck = live?.program ?? null;
   const slide = slideOf(deck);
 

@@ -10,7 +10,7 @@ import { useEffect, useRef, useState } from 'react';
 import type { Deck, Slide, Theme } from './types';
 import { fileUrl } from './file-url';
 import {
-  STAGE_W, STAGE_H, FALLBACK_THEME, backgroundStyle, bodyStyle,
+  STAGE_W, STAGE_H, FALLBACK_THEME, backgroundStyle, backdropStyle, resolveBackdrop, bodyStyle,
   captionStyle, frameStyle, captionOf,
 } from './slide-render';
 
@@ -106,6 +106,12 @@ export function SlideSurface({
   const mediaKind = deck?.meta?.mediaKind as 'image' | 'video' | undefined;
   const showMedia = !!mediaFile && !blackout && !cleared;
 
+  // The theme's standing background for this kind of content. Media sent for
+  // one specific item wins over it, so a chosen clip is never fighting the
+  // scripture backdrop underneath.
+  const backdrop = resolveBackdrop(deck ?? null, active);
+  const showBackdrop = !!backdrop && !showMedia && !blackout && !cleared;
+
   return (
     <div
       ref={hostRef}
@@ -137,6 +143,32 @@ export function SlideSurface({
           ...backgroundStyle(active),
         }}
       >
+        {/* The theme's own background for scripture / songs, underneath any
+            media the operator sent for this particular item. */}
+        {showBackdrop && backdrop!.kind === 'video' && (
+          <video
+            className="slide-backdrop"
+            key={backdrop!.file}
+            src={fileUrl(backdrop!.file)}
+            style={backdropStyle(backdrop!)}
+            autoPlay
+            loop
+            muted
+            playsInline
+          />
+        )}
+        {showBackdrop && backdrop!.kind === 'image' && (
+          <img
+            className="slide-backdrop"
+            src={fileUrl(backdrop!.file)}
+            style={backdropStyle(backdrop!)}
+            alt=""
+          />
+        )}
+        {showBackdrop && backdrop!.dim > 0 && (
+          <div className="slide-scrim" style={{ opacity: backdrop!.dim }} />
+        )}
+
         {/* Behind the text layer, above the theme background. */}
         {showMedia && mediaKind === 'video' && (
           <video

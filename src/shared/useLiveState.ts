@@ -13,7 +13,18 @@ export function useLiveState(): LiveStateShape | null {
 
   useEffect(() => {
     const bp = window.bp;
-    if (!bp) return;
+
+    // No bridge means we are being rendered in a plain browser — an OBS
+    // Browser Source pointed at the local output server. Take state from the
+    // event stream instead; EventSource reconnects on its own if OBS restarts
+    // the source mid-service.
+    if (!bp) {
+      const source = new EventSource('/live');
+      source.onmessage = (e) => {
+        try { setState(JSON.parse(e.data) as LiveStateShape); } catch { /* keep last good frame */ }
+      };
+      return () => source.close();
+    }
 
     let cancelled = false;
     // Pull once on mount — a window opened mid-service must not start blank.

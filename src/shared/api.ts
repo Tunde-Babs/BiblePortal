@@ -55,6 +55,14 @@ export type SmartResult =
   | ({ kind: 'text' } & SearchResult)
   | { kind: 'empty'; query: string };
 
+export interface OutputServerStatus {
+  running: boolean;
+  port: number;
+  host: string;
+  clients: number;
+  url: string;
+}
+
 export const api = {
   // ------------------------------------------------------------------ bible
   bible: {
@@ -75,6 +83,10 @@ export const api = {
     lexiconSearch: (q: string, limit?: number) =>
       call<{ results: (StrongsEntry & { code: string })[] }>(() => bridge().bible.lexiconSearch(q as never, limit as never)).then((r) => r.results),
     stats: () => call(() => bridge().bible.stats()),
+    /** Split paragraphed scripture into slide-sized line groups. */
+    chunkProse: (text: string, maxLines?: number) =>
+      call<{ chunks: string[][] }>(() => bridge().bible.chunkProse(text as never, maxLines as never))
+        .then((r) => r.chunks),
   },
 
   // ----------------------------------------------------------- translations
@@ -98,6 +110,10 @@ export const api = {
       call<{ results: { song: Song; score: number; reason: string }[] }>(() => bridge().songs.search(q as never, limit as never)).then((r) => r.results),
     upsert: (song: Partial<Song>) => call<{ song: Song }>(() => bridge().songs.upsert(song as never)).then((r) => r.song),
     remove: (id: string) => call(() => bridge().songs.remove(id as never)),
+    removeMany: (ids: string[]) =>
+      call<{ removed: number; remaining: number }>(() => bridge().songs.removeMany(ids as never)),
+    removeAll: () =>
+      call<{ removed: number; remaining: number }>(() => bridge().songs.removeAll()),
     markUsed: (id: string) => call(() => bridge().songs.markUsed(id as never)),
     stats: () => call<{ count: number; withChords: number; withCcli: number; tags: string[] }>(() => bridge().songs.stats()),
     slides: (id: string, opts?: Record<string, unknown>) =>
@@ -280,6 +296,22 @@ export const api = {
       call<EwImportResult>(() => bridge().ew.importSchedule(filePath as never, what as never)),
     importFolder: (dir: string, what?: Record<string, boolean>) =>
       call<EwImportResult & { files: number }>(() => bridge().ew.importFolder(dir as never, what as never)),
+    pickProfile: () => call<{ path: string | null }>(() => bridge().ew.pickProfile()),
+    inspectProfile: (dir: string) => call<EwProfile>(() => bridge().ew.inspectProfile(dir as never)),
+    importProfile: (dir: string, opts?: { limit?: number }) =>
+      call<EwProfileImport>(() => bridge().ew.importProfile(dir as never, opts as never)),
+    importProfileMedia: (dir: string) =>
+      call<EwMediaImport>(() => bridge().ew.importProfileMedia(dir as never)),
+    countImported: () => call<{ count: number; total: number }>(() => bridge().ew.countImported()),
+    removeImported: () => call<{ removed: number; remaining: number }>(() => bridge().ew.removeImported()),
+  },
+
+  // ------------------------------------------------------- output server
+  outputServer: {
+    status: () => call<OutputServerStatus>(() => bridge().outputServer.status()),
+    start: (opts?: { port?: number; allowLan?: boolean }) =>
+      call<OutputServerStatus>(() => bridge().outputServer.start(opts as never)),
+    stop: () => call<OutputServerStatus>(() => bridge().outputServer.stop()),
   },
 
   // -------------------------------------------------------------------- app
@@ -292,6 +324,9 @@ export const api = {
       call(() => bridge().app.diag(label as never, payload as never)),
     setDirty: (dirty: boolean, label?: string) => call(() => bridge().app.setDirty(dirty as never, label as never)),
     quit: () => call(() => bridge().app.quit()),
+    /** Native modal for destructive actions. Resolves false if the user backs out. */
+    confirm: (opts: { title?: string; message: string; detail?: string; confirmLabel?: string }) =>
+      call<{ confirmed: boolean }>(() => bridge().app.confirm(opts as never)),
   },
 
   on: (event: string, handler: (payload: never) => void) => bridge().on(event, handler),
@@ -375,6 +410,8 @@ export interface OnlineDiagnosis {
 
 export interface OnlineLookup {
   online: true;
+  /** True when the translation is paragraphed rather than versified. */
+  paragraph?: boolean;
   label: string;
   translation: string;
   translationName: string;
@@ -392,6 +429,30 @@ export interface EwInspection {
   tables: string[];
   notes: string[];
   sample: { title: string; author: string; sections: number }[];
+}
+
+export interface EwProfile {
+  table: string;
+  folder: string;
+  songs: number;
+  memoMB: number;
+  fields: string[];
+}
+
+export interface EwProfileImport {
+  total: number;
+  imported: number;
+  skipped: number;
+  empty: number;
+  errors: string[];
+}
+
+export interface EwMediaImport {
+  total: number;
+  imported: number;
+  skipped: number;
+  bytes: number;
+  errors: string[];
 }
 
 export interface EwImportResult {

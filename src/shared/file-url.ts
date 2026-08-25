@@ -15,6 +15,13 @@ export function fileUrl(filePath: string): string {
   // Already a URL of some kind — leave it alone.
   if (/^[a-z][a-z0-9+.-]*:/i.test(filePath)) return filePath;
 
+  // Served to a browser (an OBS Browser Source) rather than rendered in the
+  // app: a page loaded over http cannot read file:// URLs, so media has to
+  // come back through the output server.
+  if (typeof window !== 'undefined' && !window.bp && window.location?.protocol.startsWith('http')) {
+    return `/media?p=${encodeURIComponent(filePath)}`;
+  }
+
   let p = filePath.replace(/\\/g, '/');
 
   // \\server\share → file://server/share

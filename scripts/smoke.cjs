@@ -229,6 +229,176 @@ app.whenReady().then(async () => {
 
     const strongs = await run('return await window.bp.bible.strongs("G26");');
     record("Strong's lexicon reachable", strongs.ok === true, strongs.translit);
+
+    // ---------------------------------------- output server, as OBS sees it
+    // Loaded in a window with no preload, which is the situation that matters:
+    // OBS is a plain browser, so if the page needs the bridge it renders blank.
+    const started = await run('return await window.bp.outputServer.start({ port: 0 });');
+    record('output server starts', started.running === true, `port ${started.port}`);
+
+    if (started.running) {
+      // take() commits whatever is in preview, so load it there first.
+      await run(`return await window.bp.live.preview({
+        kind: 'bible', title: 'John 3:16', index: 0, meta: {},
+        slides: [{ lines: ['For God so loved the world'], reference: 'John 3:16' }],
+      });`);
+      await run('return await window.bp.live.take();');
+
+      const obs = new BrowserWindow({ show: false, width: 1280, height: 720 });
+      try {
+        await obs.loadURL(`http://127.0.0.1:${started.port}/output`);
+        const noBridge = await obs.webContents.executeJavaScript('typeof window.bp === "undefined"', true);
+        record('OBS-side page has no Electron bridge', noBridge === true);
+
+        // Give the event stream a moment to deliver the first frame.
+        const painted = await obs.webContents.executeJavaScript(`(async () => {
+          for (let i = 0; i < 40; i += 1) {
+            const t = document.body.innerText.trim();
+            if (t) return t;
+            await new Promise((r) => setTimeout(r, 100));
+          }
+          return '';
+        })()`, true);
+        record('output renders in a plain browser over SSE',
+          painted.includes('For God so loved the world'), painted.slice(0, 48));
+
+        const status = await run('return await window.bp.outputServer.status();');
+        record('server sees the connected source', status.clients >= 1, `${status.clients} client(s)`);
+
+        // Backgrounds are the thing most likely to break in a browser: the app
+        // renders them from file://, which a page served over http cannot read.
+        const fs = require('node:fs');
+        const pathMod = require('node:path');
+        const mediaDir = pathMod.join(app.getPath('userData'), 'media');
+        fs.mkdirSync(mediaDir, { recursive: true });
+        const png = pathMod.join(mediaDir, 'smoke-bg.png');
+        // A 16×9 PNG: the ratio matters, because the letterbox check below
+        // asserts the background is not cropped, and `cover` only leaves an
+        // image whole when its ratio matches the surface.
+        fs.writeFileSync(png, Buffer.from(
+          'iVBORw0KGgoAAAANSUhEUgAAABAAAAAJCAIAAAC0SDtlAAAAE0lEQVR42mNQcGggCTGMahgUGgBZDX4BllU1+gAAAABJRU5ErkJggg==',
+          'base64',
+        ));
+
+        await run(`return await window.bp.live.preview({
+          kind: 'bible', title: 'With media', index: 0, meta: {},
+          slides: [{ lines: ['Background test'], image: ${JSON.stringify(png)} }],
+        });`);
+        await run('return await window.bp.live.take();');
+
+        const media = await obs.webContents.executeJavaScript(`(async () => {
+          for (let i = 0; i < 40; i += 1) {
+            const img = document.querySelector('img.slide-media');
+            if (img) {
+              if (img.complete && img.naturalWidth > 0) return { src: img.getAttribute('src'), w: img.naturalWidth };
+              if (img.complete && img.naturalWidth === 0) return { src: img.getAttribute('src'), w: 0 };
+            }
+            await new Promise((r) => setTimeout(r, 100));
+          }
+          return { src: '', w: -1 };
+        })()`, true);
+        record('background media loads over the server, not file://',
+          media.w > 0 && media.src.startsWith('/media?p='), `${media.src.slice(0, 40)} · ${media.w}px`);
+
+        // A Browser Source is a size typed into a form, and OBS defaults to
+        // 800x600. At that shape the slide must letterbox, not crop: bars can
+        // be fixed afterwards, lost content cannot.
+        obs.setContentSize(800, 600);
+        const shape = await obs.webContents.executeJavaScript(`(async () => {
+          for (let i = 0; i < 30; i += 1) {
+            const el = document.querySelector('.slide-surface');
+            if (el) {
+              const r = el.getBoundingClientRect();
+              if (r.width > 0 && Math.abs(r.width - 800) < 2) {
+                const img = document.querySelector('img.slide-media');
+                return {
+                  ratio: +(r.width / r.height).toFixed(3),
+                  w: Math.round(r.width), h: Math.round(r.height),
+                  cropped: img ? img.naturalWidth / img.naturalHeight - r.width / r.height : 0,
+                  // Bars must be split evenly, not all at one edge.
+                  offBy: Math.abs((innerHeight - r.height) / 2 - r.top)
+                       + Math.abs((innerWidth - r.width) / 2 - r.left),
+                };
+              }
+            }
+            await new Promise((r2) => setTimeout(r2, 100));
+          }
+          return { ratio: 0, w: 0, h: 0, cropped: 0 };
+        })()`, true);
+        record('a non-16:9 browser source letterboxes instead of cropping',
+          Math.abs(shape.ratio - 16 / 9) < 0.02 && Math.abs(shape.cropped) < 0.02 && shape.offBy < 2,
+          `${shape.w}x${shape.h} at ratio ${shape.ratio}, centred within 800x600`);
+        fs.rmSync(png, { force: true });
+      } finally {
+        obs.destroy();
+      }
+      const stopped = await run('return await window.bp.outputServer.stop();');
+      record('output server stops cleanly', stopped.running === false);
+    }
+
+    // ------------------------------------------- theme backgrounds per kind
+    {
+      const fs2 = require('node:fs');
+      const p2 = require('node:path');
+      const dir = p2.join(app.getPath('userData'), 'media');
+      fs2.mkdirSync(dir, { recursive: true });
+      const scripturePng = p2.join(dir, 'smoke-scripture.png');
+      const songPng = p2.join(dir, 'smoke-song.png');
+      fs2.writeFileSync(scripturePng, Buffer.from('iVBORw0KGgoAAAANSUhEUgAAABAAAAAJCAIAAAC0SDtlAAAAFElEQVR42mM4ISdHEmIY1TAoNAAAYNuSQQnBL0kAAAAASUVORK5CYII=', 'base64'));
+      fs2.writeFileSync(songPng, Buffer.from('iVBORw0KGgoAAAANSUhEUgAAABAAAAAJCAIAAAC0SDtlAAAAFElEQVR42mOQOyFHEmIY1TAoNAAAATuSQWHoiUMAAAAASUVORK5CYII=', 'base64'));
+
+      const theme = await run('return await window.bp.themes.active();');
+      const base = theme.theme ?? theme;
+      const mk = (file) => ({ file, kind: 'image', fit: 'cover', opacity: 1, dim: 0.3, blur: 0 });
+      await run(`return await window.bp.themes.save(${JSON.stringify({
+        ...base,
+        backdrops: { default: null, scripture: mk(scripturePng), song: mk(songPng) },
+      })});`);
+
+      const backdropFor = async (deck) => {
+        await run(`return await window.bp.live.preview(${JSON.stringify(deck)});`);
+        await run('return await window.bp.live.take();');
+        const outputWin2 = BrowserWindow.getAllWindows().find((w) => w !== win && !w.isDestroyed());
+        if (!outputWin2) return 'no output window';
+        return outputWin2.webContents.executeJavaScript(`(async () => {
+          for (let i = 0; i < 30; i += 1) {
+            const el = document.querySelector('.slide-backdrop');
+            if (el) return (el.getAttribute('src') || '').split('/').pop();
+            await new Promise((r) => setTimeout(r, 100));
+          }
+          return 'none';
+        })()`, true);
+      };
+
+      const onScripture = await backdropFor({
+        kind: 'scripture', title: 'John 3:16', index: 0, meta: {},
+        slides: [{ lines: ['For God so loved the world'], reference: 'John 3:16' }],
+      });
+      record('scripture gets the scripture background',
+        decodeURIComponent(onScripture).includes('smoke-scripture.png'), onScripture);
+
+      const onSong = await backdropFor({
+        kind: 'song', title: 'A song', index: 0, meta: {},
+        slides: [{ lines: ['Alpha line'], reference: '' }],
+      });
+      record('songs get their own background, not the scripture one',
+        decodeURIComponent(onSong).includes('smoke-song.png'), onSong);
+
+      // Media chosen for one item must beat the standing background.
+      const onItemMedia = await backdropFor({
+        kind: 'song', title: 'With its own clip', index: 0,
+        meta: { mediaFile: scripturePng, mediaKind: 'image' },
+        slides: [{ lines: ['Beta line'], reference: '' }],
+      });
+      record('media sent for one item overrides the theme background',
+        onItemMedia === 'none', `backdrop layer: ${onItemMedia}`);
+
+      await run(`return await window.bp.themes.save(${JSON.stringify({
+        ...base, backdrops: { default: null, scripture: null, song: null },
+      })});`);
+      fs2.rmSync(scripturePng, { force: true });
+      fs2.rmSync(songPng, { force: true });
+    }
   } catch (err) {
     record('smoke run completed without throwing', false, err.message);
   }
