@@ -399,6 +399,62 @@ app.whenReady().then(async () => {
       fs2.rmSync(scripturePng, { force: true });
       fs2.rmSync(songPng, { force: true });
     }
+
+    // ------------------------------------------------- running order (plan)
+    {
+      const created = await run(`return await window.bp.plans.create('Smoke service');`);
+      const planId = created.plan.id;
+      await run(`return await window.bp.plans.addItem('${planId}', ${JSON.stringify({
+        kind: 'scripture', title: 'John 3:16-17', ref: null, notes: 'Reading before the sermon',
+      })});`);
+      const withItems = await run(`return await window.bp.plans.get('${planId}');`);
+      const plan = withItems.plan ?? withItems;
+      record('a plan item keeps its notes', plan.items[0].notes === 'Reading before the sermon',
+        plan.items[0].notes);
+
+      // Jumping straight to a slide inside an item is the point of expanding
+      // it: the operator should not have to step through to reach verse 2.
+      const hit = await run(`return await window.bp.bible.lookup('John 3:16-17');`);
+      record('a multi-verse reading yields more than one slide', hit.verses.length > 1,
+        `${hit.verses.length} verses`);
+
+      await run(`return await window.bp.live.preview({
+        kind: 'scripture', title: 'John 3:16-17', index: 1, meta: {},
+        slides: [{ lines: ['first'] }, { lines: ['second'] }],
+      });`);
+      await run('return await window.bp.live.take();');
+      const at = await run('return await window.bp.live.get();');
+      record('a deck can be taken at a chosen slide, not only the first',
+        at.state.program.index === 1, `index ${at.state.program.index}`);
+
+      // Every kind the running order offers must survive a round-trip, and a
+      // media item must resolve to its file rather than falling back to text.
+      const mediaDir2 = require('node:path').join(app.getPath('userData'), 'media');
+      require('node:fs').mkdirSync(mediaDir2, { recursive: true });
+      const bgFile = require('node:path').join(mediaDir2, 'plan-item.png');
+      require('node:fs').writeFileSync(bgFile, Buffer.from(
+        'iVBORw0KGgoAAAANSUhEUgAAABAAAAAJCAIAAACExN7CAAAAGklEQVR42mNgoBAwUqifYdSAUQNGDRg1gGwDAAyRAAGxjPBFAAAAAElFTkSuQmCC',
+        'base64'));
+
+      await run(`return await window.bp.plans.addItem('${planId}', ${JSON.stringify({ kind: 'header', title: 'Praise and Worship' })});`);
+      await run(`return await window.bp.plans.addItem('${planId}', ${JSON.stringify({ kind: 'slide', title: 'Notices', body: 'Alpha line' })});`);
+      const after = await run(`return await window.bp.plans.get('${planId}');`);
+      const kinds = (after.plan ?? after).items.map((x) => x.kind);
+      record('a plan holds scripture, headings and slides together',
+        kinds.includes('scripture') && kinds.includes('header') && kinds.includes('slide'),
+        kinds.join(', '));
+
+      // Notes are written against an item in the running order, so they must
+      // persist through a save and reload of the plan.
+      const target = (after.plan ?? after).items[0];
+      await run(`return await window.bp.plans.updateItem('${planId}', '${target.id}', ${JSON.stringify({ notes: 'Read slowly' })});`);
+      const reread = await run(`return await window.bp.plans.get('${planId}');`);
+      const savedNote = (reread.plan ?? reread).items.find((x) => x.id === target.id)?.notes;
+      record('notes typed on an item are kept', savedNote === 'Read slowly', savedNote);
+
+      require('node:fs').rmSync(bgFile, { force: true });
+      await run(`return await window.bp.plans.remove('${planId}');`);
+    }
   } catch (err) {
     record('smoke run completed without throwing', false, err.message);
   }

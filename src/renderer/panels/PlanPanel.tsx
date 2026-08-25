@@ -9,9 +9,23 @@
 import { useCallback, useEffect, useState } from 'react';
 
 import { api, type RecentSchedule, type ScheduleTemplate } from '../../shared/api';
-import type { Plan, PlanItem } from '../../shared/types';
-import { scriptureDeck, songDeck, textDeck, useApp } from '../stores/app';
-import { IconPlus, IconTrash, IconImport, IconDown } from '../components/Icons';
+import type { Deck, MediaItem, Plan, PlanItem } from '../../shared/types';
+import { mediaDeck, scriptureDeck, songDeck, textDeck, useApp } from '../stores/app';
+import { SlideSurface } from '../../shared/SlideSurface';
+import { fileUrl } from '../../shared/file-url';
+import { slideOf } from '../../shared/slide-render';
+import {
+  IconPlus, IconTrash, IconImport, IconDown, IconBible, IconSong, IconMedia, IconPlan,
+} from '../components/Icons';
+
+/** The badge on a thumbnail, so the kind of item reads at a glance. */
+function KindBadge({ kind }: { kind: string }) {
+  const icon = kind === 'song' ? <IconSong size={10} />
+    : kind === 'scripture' ? <IconBible size={10} />
+      : kind === 'media' ? <IconMedia size={10} />
+        : <IconPlan size={10} />;
+  return <span className="plan-thumb-badge">{icon}</span>;
+}
 
 const KIND_LABEL: Record<string, string> = {
   scripture: 'Scripture', song: 'Song', media: 'Media',
@@ -25,12 +39,16 @@ export function PlanPanel() {
   const activePlanId = useApp((s) => s.activePlanId);
   const setActivePlan = useApp((s) => s.setActivePlan);
   const refreshPlans = useApp((s) => s.refreshPlans);
+  const live = useApp((s) => s.live);
   const preview = useApp((s) => s.preview);
   const previewAndTake = useApp((s) => s.previewAndTake);
   const toast = useApp((s) => s.toast);
 
   const [plan, setPlan] = useState<Plan | null>(null);
-  const [adding, setAdding] = useState<'scripture' | 'slide' | null>(null);
+  const [adding, setAdding] = useState<'scripture' | 'slide' | 'heading' | null>(null);
+  const [library, setLibrary] = useState<MediaItem[]>([]);
+  /** Open picker: choosing a song or a background to drop into the plan. */
+  const [picker, setPicker] = useState<'song' | 'media' | null>(null);
   const [draft, setDraft] = useState('');
   const [dragIndex, setDragIndex] = useState<number | null>(null);
   const [selectedItem, setSelectedItem] = useState<string | null>(null);
@@ -153,6 +171,14 @@ export function PlanPanel() {
     }
   }, [draft, plan, addItem, settings, toast]);
 
+  const addHeading = useCallback(async () => {
+    const text = draft.trim();
+    if (!text) return;
+    await addItem({ kind: 'header', title: text });
+    setDraft('');
+    setAdding(null);
+  }, [draft, addItem]);
+
   const addSlide = useCallback(async () => {
     if (!draft.trim()) return;
     const [first, ...rest] = draft.split('\n');
@@ -161,29 +187,121 @@ export function PlanPanel() {
     setAdding(null);
   }, [draft, addItem]);
 
-  /** Turn a plan item into a deck and stage it. */
-  const stageItem = useCallback(async (item: PlanItem, take = false) => {
+  useEffect(() => { api.media.all().then(setLibrary).catch(() => {}); }, []);
+
+  /**
+   * Build the deck an item would put on screen, without staging it.
+   *
+   * Shared by staging, the row thumbnail and the expanded slide list, so what
+   * the operator scrubs through in the running order is the same deck that
+   * goes out — not a second rendering that can drift from it.
+   */
+  const deckFor = useCallback(async (item: PlanItem): Promise<Partial<Deck> | null> => {
+    if (item.kind === 'scripture' && item.ref) {
+      const hit = await api.bible.lookup(item.title, settings?.general.defaultTranslation);
+      return scriptureDeck(hit.label, hit.verses, hit.translationAbbr,
+        settings?.presentation.versesPerSlide ?? 2);
+    }
+    if (item.kind === 'song' && item.songId) {
+      const song = songs.find((s) => s.id === item.songId);
+      if (!song) return null;
+      const slides = await api.songs.slides(song.id,
+        { maxLines: settings?.presentation.maxLinesPerSlide ?? 4 });
+      return songDeck(song, slides, item.key ?? song.key);
+    }
+    if (item.kind === 'media' && item.mediaId) {
+      const found = library.find((m) => m.id === item.mediaId);
+      return found ? mediaDeck(found) : null;
+    }
+    // A heading groups the running order; it is not something to project.
+    if (item.kind === 'header') return null;
+    return textDeck(item.title, item.body || item.title);
+  }, [songs, settings, library]);
+
+  /**
+   * Fill in a deck's optional fields so it can be rendered directly.
+   * The builders return partials because the main process completes them.
+   */
+  const whole = useCallback((d: Partial<Deck> | null | undefined): Deck | null => (
+    d ? {
+      kind: d.kind ?? 'blank', title: d.title ?? '', slides: d.slides ?? [],
+      index: d.index ?? 0, meta: d.meta ?? {},
+    } as Deck : null
+  ), []);
+
+  /** Decks already built, so expanding and re-expanding costs nothing. */
+  const [decks, setDecks] = useState<Record<string, Partial<Deck> | null>>({});
+
+  const loadDeck = useCallback(async (item: PlanItem) => {
+    if (decks[item.id] !== undefined) return decks[item.id];
+    try {
+      const deck = await deckFor(item);
+      setDecks((prev) => ({ ...prev, [item.id]: deck }));
+      return deck;
+    } catch {
+      setDecks((prev) => ({ ...prev, [item.id]: null }));
+      return null;
+    }
+  }, [decks, deckFor]);
+
+  /** Stage an item, optionally opening at one particular slide. */
+  const stageItem = useCallback(async (item: PlanItem, take = false, index = 0) => {
     try {
       setSelectedItem(item.id);
-      if (item.kind === 'scripture' && item.ref) {
-        const label = item.title;
-        const hit = await api.bible.lookup(label, settings?.general.defaultTranslation);
-        const deck = scriptureDeck(hit.label, hit.verses, hit.translationAbbr, settings?.presentation.versesPerSlide ?? 2);
-        return take ? previewAndTake(deck) : preview(deck);
-      }
-      if (item.kind === 'song' && item.songId) {
-        const song = songs.find((s) => s.id === item.songId);
-        if (!song) { toast('That song is no longer in the library', 'warn'); return; }
-        const slides = await api.songs.slides(song.id, { maxLines: settings?.presentation.maxLinesPerSlide ?? 4 });
-        const deck = songDeck(song, slides, item.key ?? song.key);
-        return take ? previewAndTake(deck) : preview(deck);
-      }
-      const deck = textDeck(item.title, item.body || item.title);
-      return take ? previewAndTake(deck) : preview(deck);
+      const deck = await deckFor(item);
+      if (!deck) { toast('That song is no longer in the library', 'warn'); return; }
+      const at = index > 0 ? { ...deck, index } : deck;
+      return take ? previewAndTake(at) : preview(at);
     } catch (err) {
       toast(err instanceof Error ? err.message : String(err), 'error');
     }
-  }, [songs, settings, preview, previewAndTake, toast]);
+  }, [deckFor, preview, previewAndTake, toast]);
+
+  /**
+   * Build every item's deck when the plan opens, so the running order shows
+   * its thumbnails straight away rather than filling in as the mouse passes
+   * over them. Sequential on purpose: a plan is a handful of items, and this
+   * must never compete with the lookup behind a live take.
+   */
+  useEffect(() => {
+    if (!plan?.items.length) return;
+    let cancelled = false;
+    (async () => {
+      for (const item of plan.items) {
+        if (cancelled) return;
+        let built: Partial<Deck> | null = null;
+        try { built = await deckFor(item); } catch { built = null; }
+        if (cancelled) return;
+        setDecks((prev) => (item.id in prev ? prev : { ...prev, [item.id]: built }));
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [plan?.id, plan?.items.length, deckFor]);
+
+  /** Item whose notes are being typed, and the text so far. */
+  const [notesFor, setNotesFor] = useState<string | null>(null);
+  const [notesDraft, setNotesDraft] = useState('');
+
+  const saveNotes = useCallback(async (item: PlanItem) => {
+    setNotesFor(null);
+    if (!plan || notesDraft === (item.notes ?? '')) return;
+    await api.plans.updateItem(plan.id, item.id, { notes: notesDraft });
+    setPlan(await api.plans.get(plan.id));
+    setDirty(true);
+  }, [plan, notesDraft]);
+
+  /** Items whose slides are showing. */
+  const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
+
+  const toggleExpand = useCallback(async (item: PlanItem) => {
+    const open = expanded.has(item.id);
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      if (open) next.delete(item.id); else next.add(item.id);
+      return next;
+    });
+    if (!open) await loadDeck(item);
+  }, [expanded, loadDeck]);
 
   const removeItem = useCallback(async (itemId: string) => {
     if (!plan) return;
@@ -338,13 +456,63 @@ export function PlanPanel() {
       )}
 
       <div className="panel-toolbar">
-        <button className="btn sm" onClick={() => { setAdding('scripture'); setDraft(''); }}>+ Scripture</button>
-        <button className="btn sm" onClick={() => { setAdding('slide'); setDraft(''); }}>+ Slide</button>
+        <button className="btn sm" onClick={() => { setAdding('scripture'); setDraft(''); setPicker(null); }}>+ Scripture</button>
+        <button className="btn sm" onClick={() => { setPicker(picker === 'song' ? null : 'song'); setAdding(null); }}>+ Song</button>
+        <button className="btn sm" onClick={() => { setPicker(picker === 'media' ? null : 'media'); setAdding(null); }}>+ Media</button>
+        <button className="btn sm" onClick={() => { setAdding('slide'); setDraft(''); setPicker(null); }}>+ Slide</button>
+        <button className="btn sm" onClick={() => { setAdding('heading'); setDraft(''); setPicker(null); }}>+ Heading</button>
         <div className="panel-head-spacer" />
         <span className="faint" style={{ fontSize: 'var(--fs-xs)' }}>
           {plan?.items.length ?? 0} item{plan?.items.length === 1 ? '' : 's'}
         </span>
       </div>
+
+      {picker === 'song' && (
+        <div className="panel-pad" style={{ borderBottom: '1px solid var(--line-soft)', maxHeight: 220, overflowY: 'auto' }}>
+          {songs.length === 0 ? (
+            <span className="field-hint">No songs in your library yet — import or write one in the Songs panel.</span>
+          ) : (
+            <div className="row" style={{ flexWrap: 'wrap', gap: 'var(--sp-2)' }}>
+              {songs.map((song) => (
+                <button
+                  key={song.id}
+                  className="btn sm"
+                  onClick={() => { void addItem({ kind: 'song', title: song.title, songId: song.id, key: song.key }); setPicker(null); }}
+                >
+                  {song.title}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {picker === 'media' && (
+        <div className="panel-pad" style={{ borderBottom: '1px solid var(--line-soft)' }}>
+          {library.length === 0 ? (
+            <span className="field-hint">
+              Nothing in your media library yet — add images or motion loops in the Media panel.
+            </span>
+          ) : (
+            <div className="backdrop-grid">
+              {library.map((m) => (
+                <button
+                  key={m.id}
+                  className="backdrop-tile"
+                  title={m.name}
+                  onClick={() => { void addItem({ kind: 'media', title: m.name, mediaId: m.id }); setPicker(null); }}
+                >
+                  {m.kind === 'video'
+                    ? <video src={fileUrl(m.file)} muted playsInline preload="metadata" />
+                    : <img src={fileUrl(m.file)} alt="" />}
+                  <span className="backdrop-name truncate">{m.name}</span>
+                  {m.kind === 'video' && <span className="backdrop-badge">MOTION</span>}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
 
       {adding && (
         <div className="panel-pad" style={{ borderBottom: '1px solid var(--line-soft)' }}>
@@ -356,6 +524,15 @@ export function PlanPanel() {
               value={draft}
               onChange={(e) => setDraft(e.target.value)}
               onKeyDown={(e) => { if (e.key === 'Enter') void addScripture(); if (e.key === 'Escape') setAdding(null); }}
+            />
+          ) : adding === 'heading' ? (
+            <input
+              className="input"
+              autoFocus
+              placeholder="Section name — e.g. Praise and Worship"
+              value={draft}
+              onChange={(e) => setDraft(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter') void addHeading(); if (e.key === 'Escape') setAdding(null); }}
             />
           ) : (
             <textarea
@@ -370,7 +547,8 @@ export function PlanPanel() {
           <div className="row" style={{ marginTop: 'var(--sp-3)' }}>
             <button
               className="btn primary"
-              onClick={() => void (adding === 'scripture' ? addScripture() : addSlide())}
+              onClick={() => void (adding === 'scripture' ? addScripture()
+                : adding === 'heading' ? addHeading() : addSlide())}
               disabled={!draft.trim()}
             >
               Add
@@ -390,27 +568,20 @@ export function PlanPanel() {
           </div>
         ) : (
           plan.items.map((item, i) => (
-            <div
-              key={item.id}
-              className={`list-row ${selectedItem === item.id ? 'selected' : ''}`}
-              draggable
-              onDragStart={() => setDragIndex(i)}
-              onDragOver={(e) => e.preventDefault()}
-              onDrop={() => void drop(i)}
-              onDragEnd={() => setDragIndex(null)}
-              onClick={() => void stageItem(item)}
-              onDoubleClick={() => void stageItem(item, true)}
-              style={{ opacity: dragIndex === i ? 0.4 : 1, cursor: 'grab' }}
-            >
-              <span className="mono faint" style={{ width: 20, flex: 'none', fontSize: 'var(--fs-xs)' }}>{i + 1}</span>
-              <div className="list-main">
-                <div className="list-title truncate">{item.title}</div>
-                <div className="list-sub">{KIND_LABEL[item.kind] ?? item.kind}{item.key ? ` · ${item.key}` : ''}</div>
-              </div>
-              <div className="list-actions">
-                <button className="btn sm live" onClick={(e) => { e.stopPropagation(); void stageItem(item, true); }}>
-                  Take
-                </button>
+            item.kind === 'header' ? (
+              /* A heading groups the running order rather than going on screen,
+                 so it carries no thumbnail and no take. */
+              <div
+                key={item.id}
+                className="plan-heading"
+                draggable
+                onDragStart={() => setDragIndex(i)}
+                onDragOver={(e) => e.preventDefault()}
+                onDrop={() => void drop(i)}
+                onDragEnd={() => setDragIndex(null)}
+                style={{ opacity: dragIndex === i ? 0.4 : 1 }}
+              >
+                <span className="plan-heading-text truncate">{item.title}</span>
                 <button
                   className="btn sm icon ghost"
                   onClick={(e) => { e.stopPropagation(); void removeItem(item.id); }}
@@ -419,7 +590,124 @@ export function PlanPanel() {
                   <IconTrash size={12} />
                 </button>
               </div>
+            ) : (
+            <div key={item.id}>
+              <div
+                className={`list-row plan-row ${selectedItem === item.id ? 'selected' : ''}`}
+                draggable
+                onDragStart={() => setDragIndex(i)}
+                onDragOver={(e) => e.preventDefault()}
+                onDrop={() => void drop(i)}
+                onDragEnd={() => setDragIndex(null)}
+                onClick={() => void stageItem(item)}
+                onDoubleClick={() => void stageItem(item, true)}
+                style={{ opacity: dragIndex === i ? 0.4 : 1, cursor: 'grab' }}
+              >
+                <span className="mono faint plan-num">{i + 1}</span>
+
+                <button
+                  className={`plan-caret ${expanded.has(item.id) ? 'open' : ''}`}
+                  onClick={(e) => { e.stopPropagation(); void toggleExpand(item); }}
+                  title={expanded.has(item.id) ? 'Hide slides' : 'Show slides'}
+                  aria-label={expanded.has(item.id) ? 'Hide slides' : 'Show slides'}
+                >
+                  ▸
+                </button>
+
+                {/* The real surface, so the running order shows exactly what
+                    will go out rather than an approximation of it. */}
+                <div className="plan-thumb">
+                  {decks[item.id] ? (
+                    <SlideSurface
+                      slide={slideOf(whole(decks[item.id]))}
+                      deck={whole(decks[item.id])}
+                      theme={live?.theme ?? null}
+                      showSectionLabel={false}
+                      showVerseNumbers={false}
+                      still
+                    />
+                  ) : (
+                    <span className="plan-thumb-kind">{(KIND_LABEL[item.kind] ?? item.kind).slice(0, 4)}</span>
+                  )}
+                  <KindBadge kind={item.kind} />
+                </div>
+
+                <div className="list-main">
+                  <div className="list-title truncate">{item.title}</div>
+                  <div className="list-sub truncate">
+                    {KIND_LABEL[item.kind] ?? item.kind}{item.key ? ` · ${item.key}` : ''}
+                    {decks[item.id] ? ` · ${decks[item.id]!.slides?.length ?? 0} slide${(decks[item.id]!.slides?.length ?? 0) === 1 ? '' : 's'}` : ''}
+                  </div>
+                  {notesFor === item.id ? (
+                    <input
+                      className="input plan-notes-input"
+                      autoFocus
+                      value={notesDraft}
+                      placeholder="notes"
+                      onClick={(e) => e.stopPropagation()}
+                      onChange={(e) => setNotesDraft(e.target.value)}
+                      onBlur={() => void saveNotes(item)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') void saveNotes(item);
+                        if (e.key === 'Escape') setNotesFor(null);
+                      }}
+                    />
+                  ) : (
+                    <div
+                      className={`plan-notes truncate ${item.notes ? '' : 'empty'}`}
+                      onClick={(e) => { e.stopPropagation(); setNotesDraft(item.notes ?? ''); setNotesFor(item.id); }}
+                      title="Click to write a note for this item"
+                    >
+                      {item.notes || 'notes'}
+                    </div>
+                  )}
+                </div>
+
+                <div className="list-actions">
+                  <button className="btn sm live" onClick={(e) => { e.stopPropagation(); void stageItem(item, true); }}>
+                    Take
+                  </button>
+                  <button
+                    className="btn sm icon ghost"
+                    onClick={(e) => { e.stopPropagation(); void removeItem(item.id); }}
+                    title="Remove from plan"
+                  >
+                    <IconTrash size={12} />
+                  </button>
+                </div>
+              </div>
+
+              {/* Every slide in the item, so the operator can jump straight to
+                  the chorus or the third verse without stepping there. */}
+              {expanded.has(item.id) && (
+                <div className="plan-slides">
+                  {decks[item.id] === undefined && <span className="field-hint">Loading…</span>}
+                  {decks[item.id] === null && (
+                    <span className="field-hint">This item can’t be opened — the song may have been deleted.</span>
+                  )}
+                  {decks[item.id]?.slides?.map((sl, n) => (
+                    <button
+                      key={n}
+                      className="plan-slide"
+                      onClick={(e) => { e.stopPropagation(); void stageItem(item, false, n); }}
+                      onDoubleClick={(e) => { e.stopPropagation(); void stageItem(item, true, n); }}
+                      title={`${sl.sectionLabel || sl.caption || `Slide ${n + 1}`} — click to preview, double-click to take`}
+                    >
+                      <SlideSurface
+                        slide={sl}
+                        deck={whole(decks[item.id])}
+                        theme={live?.theme ?? null}
+                        showSectionLabel={false}
+                        showVerseNumbers={false}
+                        still
+                      />
+                      <span className="plan-slide-no">{n + 1}</span>
+                    </button>
+                  ))}
+                </div>
+              )}
             </div>
+            )
           ))
         )}
       </div>

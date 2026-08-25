@@ -450,6 +450,138 @@
 .btn.danger { background: var(--danger); border-color: var(--danger); color: #fff; }
 .btn.danger:hover:not(:disabled) { filter: brightness(1.08); }
 
+/* ---------------------------------------------------- running order rows */
+
+.plan-row { align-items: flex-start; padding-top: var(--sp-2); padding-bottom: var(--sp-2); }
+.plan-num { width: 18px; flex: none; font-size: var(--fs-xs); padding-top: 12px; }
+
+.plan-caret {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  margin-top: 12px;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--text-faint);
+  font-size: 10px;
+  line-height: 1;
+  cursor: pointer;
+  transition: transform var(--fast), color var(--fast);
+}
+.plan-caret:hover { color: var(--text); }
+.plan-caret.open { transform: rotate(90deg); }
+
+/* The item's first slide, rendered by the real surface. */
+.plan-thumb {
+  position: relative;
+  flex: none;
+  /* Large enough to recognise a slide at a glance while scanning the order. */
+  width: 124px;
+  aspect-ratio: 16 / 9;
+  border-radius: 4px;
+  overflow: hidden;
+  background: var(--bg-sunken, #0b1020);
+  border: 1px solid var(--line-soft);
+}
+.plan-thumb-badge {
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  display: grid;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 3px;
+  color: #fff;
+  background: rgba(8, 12, 26, 0.82);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+}
+.plan-thumb-kind {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  font-size: 9px;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+}
+
+.plan-notes {
+  margin-top: 2px;
+  font-size: var(--fs-xs);
+  font-style: italic;
+  color: var(--text-faint);
+  cursor: text;
+}
+/* An empty note still shows its placeholder, so it is discoverable as a
+   place to write rather than invisible until something is in it. */
+.plan-notes.empty { opacity: 0; transition: opacity var(--fast); }
+.plan-row:hover .plan-notes.empty, .list-row.selected .plan-notes.empty { opacity: .55; }
+.plan-notes-input {
+  margin-top: 2px;
+  height: 22px;
+  padding: 0 6px;
+  font-size: var(--fs-xs);
+  font-style: italic;
+}
+
+/* Expanded: every slide in the item, to jump straight to one. */
+.plan-slides {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+  padding: var(--sp-2) var(--sp-4) var(--sp-3) 108px;
+  border-bottom: 1px solid var(--line-soft);
+  background: var(--bg-sunken, rgba(0, 0, 0, 0.18));
+}
+.plan-slide {
+  position: relative;
+  width: 108px;
+  aspect-ratio: 16 / 9;
+  padding: 0;
+  border: 2px solid transparent;
+  border-radius: 4px;
+  overflow: hidden;
+  background: #000;
+  cursor: pointer;
+  transition: border-color var(--fast);
+}
+.plan-slide:hover { border-color: var(--accent); }
+.plan-slide-no {
+  position: absolute;
+  left: 3px;
+  bottom: 2px;
+  padding: 0 4px;
+  font-size: 9px;
+  font-weight: 700;
+  color: #fff;
+  background: rgba(0, 0, 0, 0.66);
+  border-radius: 2px;
+}
+
+/* A heading groups the running order — it never goes on screen. */
+.plan-heading {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: var(--sp-3) var(--sp-4) var(--sp-2);
+  border-bottom: 1px solid var(--line-soft);
+  background: var(--bg-sunken, rgba(0, 0, 0, 0.22));
+  cursor: grab;
+}
+.plan-heading-text {
+  flex: 1;
+  font-size: var(--fs-xs);
+  font-weight: 700;
+  letter-spacing: .1em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+}
+.plan-heading .btn { opacity: 0; transition: opacity var(--fast); }
+.plan-heading:hover .btn { opacity: 1; }
+
 /* Media picker for theme backgrounds. */
 .backdrop-grid {
   display: grid;

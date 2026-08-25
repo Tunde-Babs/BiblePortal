@@ -35,12 +35,17 @@ interface Props {
   className?: string;
   /** Fill the parent instead of measuring it (used inside fixed-size frames). */
   fill?: boolean;
+  /**
+   * Freeze motion. A running order shows a thumbnail per item, and starting a
+   * video decoder for each one costs more than the thumbnails are worth.
+   */
+  still?: boolean;
 }
 
 export function SlideSurface({
   slide, deck, theme, blackout = false, cleared = false, logo = false,
   showTranslation = true, showSectionLabel = true, showVerseNumbers = false,
-  className = '', fill = true,
+  className = '', fill = true, still = false,
 }: Props) {
   const hostRef = useRef<HTMLDivElement>(null);
   const [scale, setScale] = useState(0);
@@ -151,10 +156,11 @@ export function SlideSurface({
             key={backdrop!.file}
             src={fileUrl(backdrop!.file)}
             style={backdropStyle(backdrop!)}
-            autoPlay
-            loop
+            autoPlay={!still}
+            loop={!still}
             muted
             playsInline
+            preload={still ? 'metadata' : 'auto'}
           />
         )}
         {showBackdrop && backdrop!.kind === 'image' && (
@@ -174,10 +180,11 @@ export function SlideSurface({
           <video
             className="slide-media"
             src={fileUrl(mediaFile!)}
-            autoPlay
-            loop
+            autoPlay={!still}
+            loop={!still}
             muted
             playsInline
+            preload={still ? 'metadata' : 'auto'}
           />
         )}
         {showMedia && mediaKind === 'image' && (
