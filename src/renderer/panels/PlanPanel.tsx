@@ -13,6 +13,7 @@ import type { Deck, MediaItem, Plan, PlanItem } from '../../shared/types';
 import { mediaDeck, scriptureDeck, songDeck, textDeck, useApp } from '../stores/app';
 import { SlideSurface } from '../../shared/SlideSurface';
 import { fileUrl } from '../../shared/file-url';
+import { SongPicker } from '../components/SongPicker';
 import { slideOf } from '../../shared/slide-render';
 import {
   IconPlus, IconTrash, IconImport, IconDown, IconBible, IconSong, IconMedia, IconPlan,
@@ -468,22 +469,15 @@ export function PlanPanel() {
       </div>
 
       {picker === 'song' && (
-        <div className="panel-pad" style={{ borderBottom: '1px solid var(--line-soft)', maxHeight: 220, overflowY: 'auto' }}>
-          {songs.length === 0 ? (
-            <span className="field-hint">No songs in your library yet — import or write one in the Songs panel.</span>
-          ) : (
-            <div className="row" style={{ flexWrap: 'wrap', gap: 'var(--sp-2)' }}>
-              {songs.map((song) => (
-                <button
-                  key={song.id}
-                  className="btn sm"
-                  onClick={() => { void addItem({ kind: 'song', title: song.title, songId: song.id, key: song.key }); setPicker(null); }}
-                >
-                  {song.title}
-                </button>
-              ))}
-            </div>
-          )}
+        <div className="panel-pad" style={{ borderBottom: '1px solid var(--line-soft)', maxHeight: 260, overflowY: 'auto' }}>
+          <SongPicker
+            songs={songs}
+            autoFocus
+            onPick={(song) => {
+              void addItem({ kind: 'song', title: song.title, songId: song.id, key: song.key });
+              setPicker(null);
+            }}
+          />
         </div>
       )}
 
@@ -713,18 +707,15 @@ export function PlanPanel() {
       </div>
 
       {!!songs.length && (
-        <div className="panel-pad" style={{ borderTop: '1px solid var(--line)', flex: 'none', maxHeight: 180, overflowY: 'auto' }}>
+        <div className="panel-pad" style={{ borderTop: '1px solid var(--line)', flex: 'none', maxHeight: 200, overflowY: 'auto' }}>
           <span className="section-label">Add a song</span>
-          <div className="row" style={{ flexWrap: 'wrap', gap: 'var(--sp-2)', marginTop: 'var(--sp-2)' }}>
-            {songs.slice(0, 12).map((song) => (
-              <button
-                key={song.id}
-                className="btn sm"
-                onClick={() => void addItem({ kind: 'song', title: song.title, songId: song.id, key: song.key })}
-              >
-                + {song.title}
-              </button>
-            ))}
+          <div style={{ marginTop: 'var(--sp-2)' }}>
+            <SongPicker
+              songs={songs}
+              plus
+              placeholder="Search your songs…"
+              onPick={(song) => void addItem({ kind: 'song', title: song.title, songId: song.id, key: song.key })}
+            />
           </div>
         </div>
       )}

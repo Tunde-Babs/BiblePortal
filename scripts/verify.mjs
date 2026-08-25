@@ -1306,6 +1306,103 @@ check('trailing NUL and space padding is trimmed from text fields', () => {
   eq(header.fields.reduce((n, f) => n + f.size, 0), 40);
 });
 
+describe('Finding a song to add to a plan');
+await checkAsync('search finds a song by title, author and by a line in it', async () => {
+  const store = new Store(path.join(TMP, 'pick1'));
+  const songs = new SongService(store);
+  await songs.upsert({
+    title: 'Alpha Song', author: 'Gamma Writer',
+    sections: [{ id: 's1', label: 'Verse 1', type: 'verse', number: 1, body: 'Delta line of words' }],
+  });
+  await songs.upsert({ title: 'Unrelated', author: 'Someone', sections: [] });
+
+  const byTitle = await songs.search('Alpha', 40);
+  eq(byTitle[0].song.title, 'Alpha Song');
+  const byAuthor = await songs.search('Gamma', 40);
+  eq(byAuthor[0].song.title, 'Alpha Song');
+  const byLyric = await songs.search('Delta line', 40);
+  eq(byLyric[0].song.title, 'Alpha Song', 'searching a line should find its song');
+});
+await checkAsync('one malformed song does not break search for the rest', async () => {
+  const store = new Store(path.join(TMP, 'pick4'));
+  const songs = new SongService(store);
+  await songs.upsert({ title: 'Good Song', sections: [{ id: 'a', label: 'V1', type: 'verse', number: 1, body: 'Fine words' }] });
+  // A section with no body at all — the shape a bad import can leave behind.
+  await songs.upsert({ title: 'Broken Song', sections: [{ id: 'b', label: 'V1', type: 'verse', number: 1 }] });
+  const res = await songs.search('Good', 40);
+  eq(res[0].song.title, 'Good Song', 'search must survive a song with an empty section');
+});
+await checkAsync('a wordy query does not drag in songs sharing one common word', async () => {
+  const store = new Store(path.join(TMP, 'pick5'));
+  const songs = new SongService(store);
+  // Neutral placeholder lyrics; "lord" and "oh" are deliberately everywhere,
+  // which is what a real worship library looks like.
+  const make = (title, body) => songs.upsert({
+    title, sections: [{ id: 'a', label: 'V1', type: 'verse', number: 1, body }],
+  });
+  await make('Sunday School', 'Oh we gather for sunday school today');
+  await make('Lace Finishing School', 'Alpha beta gamma delta');
+  await make('Kumbaya', 'Oh lord come by here');
+  await make('Jehovah Lord Divine', 'Oh lord you are divine');
+  await make('Teen’s Song', 'Alpha line beta line');
+  await make('mmmama mmmama', 'Oh oh oh');
+
+  const res = await songs.search('oh sunday school on the lord', 40);
+  const titles = res.map((r) => r.song.title);
+
+  eq(titles[0], 'Sunday School', `expected Sunday School first, got ${titles.join(', ')}`);
+  // These share only "school", or only "oh"/"lord" — one common word is not a match.
+  for (const junk of ['Lace Finishing School', 'Teen’s Song', 'mmmama mmmama']) {
+    ok(!titles.includes(junk), `"${junk}" should not match — got ${titles.join(', ')}`);
+  }
+});
+await checkAsync('interjections alone never constitute a match', async () => {
+  const store = new Store(path.join(TMP, 'pick8'));
+  const songs = new SongService(store);
+  await songs.upsert({ title: 'Wanted Song',
+    sections: [{ id: 'a', label: 'V1', type: 'verse', number: 1, body: 'Zebra quokka narwhal' }] });
+  await songs.upsert({ title: 'Other Song',
+    sections: [{ id: 'b', label: 'V1', type: 'verse', number: 1, body: 'Oh oh oh yeah yeah' }] });
+  // "oh" carries no meaning, so it must not pull Other Song into the results.
+  const res = await songs.search('oh zebra quokka', 40);
+  eq(res.map((r) => r.song.title), ['Wanted Song']);
+});
+await checkAsync('a single distinctive word still finds its song', async () => {
+  const store = new Store(path.join(TMP, 'pick6'));
+  const songs = new SongService(store);
+  await songs.upsert({ title: 'Kumbaya', sections: [] });
+  await songs.upsert({ title: 'Something Else', sections: [] });
+  const res = await songs.search('kumbaya', 40);
+  eq(res[0].song.title, 'Kumbaya');
+  eq(res.length, 1, 'one distinctive word should not also return unrelated songs');
+});
+await checkAsync('a title match still wins even when typed in full', async () => {
+  const store = new Store(path.join(TMP, 'pick7'));
+  const songs = new SongService(store);
+  await songs.upsert({ title: 'Jehovah Lord Divine', sections: [] });
+  for (let i = 0; i < 12; i += 1) {
+    await songs.upsert({
+      title: `Filler ${i}`,
+      sections: [{ id: 'x', label: 'V1', type: 'verse', number: 1, body: 'oh lord oh lord' }],
+    });
+  }
+  const res = await songs.search('jehovah lord divine', 40);
+  eq(res[0].song.title, 'Jehovah Lord Divine');
+});
+await checkAsync('a search that matches nothing returns nothing, not everything', async () => {
+  const store = new Store(path.join(TMP, 'pick2'));
+  const songs = new SongService(store);
+  for (const t of ['One', 'Two', 'Three']) await songs.upsert({ title: t, sections: [] });
+  eq((await songs.search('zzzznotpresent', 40)).length, 0);
+});
+await checkAsync('results are capped so a big library stays quick to pick from', async () => {
+  const store = new Store(path.join(TMP, 'pick3'));
+  const songs = new SongService(store);
+  for (let i = 0; i < 90; i += 1) await songs.upsert({ title: `Praise number ${i}`, sections: [] });
+  const res = await songs.search('Praise', 40);
+  ok(res.length <= 40, `expected at most 40 results, got ${res.length}`);
+});
+
 describe('Theme backgrounds');
 await checkAsync('a new theme starts with no backgrounds set', async () => {
   const store = new Store(path.join(TMP, 'bd1'));

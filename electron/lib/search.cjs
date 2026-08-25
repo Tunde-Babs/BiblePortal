@@ -16,6 +16,9 @@ const STOPWORDS = new Set([
   'our','shall','she','so','that','the','their','them','then','there','these',
   'they','this','to','unto','upon','was','we','were','what','when','which','who',
   'will','with','you','your','ye','thee','thou','thy','him','hath','did','do',
+  // Interjections carry no discriminating power and are everywhere in worship
+  // lyrics: without this, "oh" alone is enough to match half a song library.
+  'oh','ooh','yeah',
 ]);
 
 /** Very small English suffix stemmer — enough to unify plural/tense variants. */

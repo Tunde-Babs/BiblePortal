@@ -11,7 +11,7 @@ const fsp = require('node:fs/promises');
 const path = require('node:path');
 
 const format = require('../lib/song-format.cjs');
-const { SearchIndex } = require('../lib/search.cjs');
+const { SearchIndex, tokenize } = require('../lib/search.cjs');
 
 const DOC = 'songs';
 /** A factory, not a constant — a shared empty document would be mutated in place. */
@@ -163,7 +163,9 @@ class SongService {
     this.indexMap = new Map();
     songs.forEach((song, i) => {
       this.indexMap.set(i, song.id);
-      const body = (song.sections ?? []).map((s) => s.body.replace(/\[[^\]]*\]/g, '')).join('\n');
+      // A section with no body would otherwise throw here and take search
+      // down for the whole library, not just for that one song.
+      const body = (song.sections ?? []).map((s) => (s.body ?? '').replace(/\[[^\]]*\]/g, '')).join('\n');
       idx.add(i, `${song.title} ${song.author} ${(song.tags ?? []).join(' ')} ${body}`);
     });
     this.index = idx;
@@ -187,24 +189,62 @@ class SongService {
     const idx = await this.ensureIndex();
     const byId = new Map(songs.map((s) => [s.id, s]));
     const scores = new Map();
+    const covered = new Map();
 
-    for (const hit of idx.search(q, { limit: limit * 3 })) {
+    // How many meaningful words the operator actually typed. Words like "the"
+    // and "on" are already dropped by the tokeniser.
+    const queryTerms = [...new Set(tokenize(q))];
+
+    for (const hit of idx.search(q, { limit: limit * 6 })) {
       const id = this.indexMap.get(hit.id);
-      if (id) scores.set(id, hit.score);
+      if (!id) continue;
+      scores.set(id, hit.score);
+      covered.set(id, hit.coverage ?? 1);
     }
+
     // Direct substring matches on title/author always rank, even for one letter.
     for (const song of songs) {
       const title = song.title.toLowerCase();
-      if (title.includes(q)) scores.set(song.id, (scores.get(song.id) ?? 0) + (title.startsWith(q) ? 14 : 8));
-      if ((song.author ?? '').toLowerCase().includes(q)) scores.set(song.id, (scores.get(song.id) ?? 0) + 4);
+      if (title.includes(q)) {
+        scores.set(song.id, (scores.get(song.id) ?? 0) + (title.startsWith(q) ? 14 : 8));
+        covered.set(song.id, 1);
+      }
+      if ((song.author ?? '').toLowerCase().includes(q)) {
+        scores.set(song.id, (scores.get(song.id) ?? 0) + 4);
+      }
     }
 
-    return [...scores.entries()]
-      .map(([id, score]) => ({ song: byId.get(id), score }))
-      .filter((r) => r.song)
+    // A word in the title says far more about a song than the same word buried
+    // in a verse: half a worship library contains "lord" somewhere.
+    if (queryTerms.length > 1) {
+      for (const song of songs) {
+        if (!scores.has(song.id)) continue;
+        const titleTerms = new Set(tokenize(song.title));
+        const inTitle = queryTerms.filter((t) => titleTerms.has(t)).length;
+        if (inTitle) scores.set(song.id, scores.get(song.id) + inTitle * 6);
+      }
+    }
+
+    let out = [...scores.entries()]
+      .map(([id, score]) => ({ song: byId.get(id), score, coverage: covered.get(id) ?? 1 }))
+      .filter((r) => r.song);
+
+    if (queryTerms.length > 1) {
+      // Matching one common word out of several is not a match. Require at
+      // least half the words the operator typed, unless the title carries the
+      // whole query as typed.
+      const need = Math.max(2, Math.ceil(queryTerms.length / 2)) / queryTerms.length;
+      out = out.filter((r) => r.coverage >= need || r.song.title.toLowerCase().includes(q));
+    }
+
+    // Anything far below the best hit is noise rather than an alternative.
+    const top = out.reduce((m, r) => Math.max(m, r.score), 0);
+    if (top > 0) out = out.filter((r) => r.score >= top * 0.3);
+
+    return out
       .sort((a, b) => b.score - a.score || a.song.title.localeCompare(b.song.title))
       .slice(0, limit)
-      .map((r) => ({ ...r, reason: r.song.title.toLowerCase().includes(q) ? 'title' : 'lyrics' }));
+      .map((r) => ({ song: r.song, score: r.score, reason: r.song.title.toLowerCase().includes(q) ? 'title' : 'lyrics' }));
   }
 
   /** Slides for presentation, with the requested key applied. */
