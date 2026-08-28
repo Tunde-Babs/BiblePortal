@@ -18,9 +18,16 @@ if a process is left behind.
 npm test             # typecheck + 331 unit checks + production build
 npm run smoke        # boots the app and drives the live pipeline
 npm run smoke:asr    # speech model load, local ONNX, detection
+npm run e2e          # end-to-end suite: drives the real app through its UI
 ```
 
-`npm test` must be green. The smoke tests need a display.
+`npm test` must be green. The smoke tests and `npm run e2e` need a display.
+
+`npm run e2e` builds first and then drives the built app — console, audience
+output and stage monitor — asserting on what the audience would actually see.
+It runs every morning in CI and publishes an Allure report; see
+[e2e/README.md](e2e/README.md) for how to write a test and what will catch you
+out. The `@slow` Whisper suite is separate: `npm run e2e:speech`.
 
 ## Content licensing — read before adding data
 
@@ -54,6 +61,9 @@ src/
   output/          audience display
   stage/           stage confidence monitor
 scripts/           data fetch, verification, smoke tests, packaging
+e2e/               end-to-end suite (Playwright + TypeScript)
+  fixtures/        per-test app instance, seeding, generated input files
+  specs/           one file per functional area
 ```
 
 ## Conventions worth knowing
@@ -83,4 +93,13 @@ scripts/           data fetch, verification, smoke tests, packaging
   single-instance lock and the new one exits silently with code 0, which looks
   identical to a crash.
 - `ELECTRON_RUN_AS_NODE` in the environment makes `electron` run as plain Node
-  and the app silently never starts. The npm scripts clear it.
+  and the app silently never starts. The npm scripts clear it, and so does the
+  end-to-end launcher — where the symptom is Playwright reporting only
+  "Process failed to launch!".
+- End-to-end tests get isolation from `--user-data-dir`. That also gives each
+  one its own single-instance lock, which is why the suite can run in parallel
+  and while the real app is open. Saved schedules go to `BP_DOCUMENTS_DIR` so a
+  test run cannot write into your real `~/Documents`.
+- **Seed preconditions over the bridge, drive the behaviour under test through
+  the UI.** A test that seeds a song and then clicks to stage it is testing the
+  UI; one that stages over the bridge is testing nothing.

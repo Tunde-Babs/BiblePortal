@@ -22,3 +22,11 @@ resources/lexicon/
 # editor
 .vscode/
 .idea/
+
+# end-to-end testing
+e2e-results/
+e2e-report/
+allure-results/
+allure-report/
+test-results/
+playwright-report/
