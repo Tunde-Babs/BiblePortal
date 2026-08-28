@@ -1,0 +1,216 @@
+name: E2E
+
+# Runs every morning against `main`, and on demand.
+#
+# The suite drives the real Electron app, so it needs a macOS runner with a
+# window server — the same platform BiblePortal ships on. Every run publishes an
+# Allure report to GitHub Pages and links it from the run summary, so a failure
+# nobody watched happen can still be read afterwards.
+on:
+  schedule:
+    # 06:00 UTC daily. Cron here is always UTC, so adjust this if your morning
+    # is somewhere else — 06:00 UTC is 07:00 in Lagos and 01:00 in New York.
+    - cron: '0 6 * * *'
+  workflow_dispatch:
+    inputs:
+      include_speech:
+        description: 'Also run the @slow Whisper suite (downloads a model)'
+        type: boolean
+        default: true
+
+# A scheduled run and a manual one must never publish over each other.
+concurrency:
+  group: e2e-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+jobs:
+  test:
+    name: Run suite
+    runs-on: macos-latest
+    timeout-minutes: 60
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      # The scripture data pack is fetched by `postinstall` from a public API.
+      # It changes only when the catalogue does, so cache it rather than
+      # downloading ~12 MB of translations every morning.
+      - name: Cache scripture data pack
+        uses: actions/cache@v4
+        with:
+          path: |
+            resources/data
+            resources/data-dist
+            resources/lexicon
+          key: bp-data-${{ hashFiles('electron/lib/catalog.cjs', 'scripts/fetch-data.mjs') }}
+
+      - name: Install
+        run: npm ci
+
+      - name: Typecheck and unit checks
+        # The end-to-end suite is slow and broad; these are fast and exact, so
+        # run them first and fail early when they can explain the problem.
+        run: npm run typecheck && npm run e2e:typecheck && npm run verify
+
+      - name: Build renderer
+        run: npm run build
+
+      - name: End-to-end suite
+        run: npx playwright test --project=e2e
+
+      - name: Speech suite (Whisper)
+        # Downloads a real model and decodes audio. Allowed to fail without
+        # failing the run: a model-host hiccup is not a defect in this app, and
+        # the step's own status still shows on the run.
+        if: ${{ github.event_name == 'schedule' || inputs.include_speech }}
+        continue-on-error: true
+        run: npx playwright test --project=speech
+
+      - name: Upload Allure results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: allure-results
+          path: allure-results
+          retention-days: 30
+
+      - name: Upload Playwright artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: |
+            e2e-report
+            e2e-results
+          retention-days: 14
+
+  report:
+    name: Publish Allure report
+    # `always()` matters: a failed run is exactly when the report is worth
+    # reading, so publishing must not be skipped when `test` goes red.
+    if: always()
+    needs: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      # Allure 2's generator is a Java program.
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - name: Configure Pages
+        id: pages
+        uses: actions/configure-pages@v5
+
+      - name: Download Allure results
+        # Tolerant on purpose: if `test` died before running anything there is
+        # no artifact, and this job should still publish a report saying so
+        # rather than failing with an unrelated download error.
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          name: allure-results
+          path: allure-results
+
+      - name: Carry over history
+        # Allure's trend graphs come from the previous report's `history`
+        # folder. Pulling it off the live site keeps trends across runs without
+        # needing a branch to stash it in. First run has nothing to fetch.
+        continue-on-error: true
+        run: |
+          base="${{ steps.pages.outputs.base_url }}"
+          mkdir -p allure-results/history
+          for file in history.json history-trend.json duration-trend.json \
+                      categories-trend.json retry-trend.json; do
+            curl -fsSL "$base/history/$file" -o "allure-results/history/$file" \
+              && echo "carried over $file" \
+              || echo "no previous $file (first run?)"
+          done
+
+      - name: Generate report
+        run: |
+          mkdir -p allure-results
+          if [ -z "$(ls -A allure-results 2>/dev/null)" ]; then
+            echo "No results — the suite did not get far enough to produce any."
+            # An empty report still deploys, so the link in the summary always
+            # resolves to something rather than a 404.
+            printf '%s' '{"name":"No results","status":"broken","statusDetails":{"message":"The suite produced no results; see the test job log."},"start":0,"stop":0,"uuid":"00000000-0000-0000-0000-000000000000","historyId":"none","labels":[{"name":"suite","value":"pipeline"}]}' \
+              > allure-results/00000000-0000-0000-0000-000000000000-result.json
+          fi
+          npm install --no-save allure-commandline@2.43.0
+          npx allure generate allure-results --clean -o allure-report
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: allure-report
+
+      - name: Deploy to GitHub Pages
+        id: deploy
+        uses: actions/deploy-pages@v4
+
+      - name: Write run summary
+        # This is what puts the report link on the run itself, next to the
+        # numbers, so nobody has to dig through job logs to find it.
+        run: |
+          url="${{ steps.deploy.outputs.page_url }}"
+          summary="allure-report/widgets/summary.json"
+
+          if [ -f "$summary" ]; then
+            read -r total passed failed broken skipped <<<"$(node -e '
+              const s = require("./allure-report/widgets/summary.json").statistic;
+              console.log(s.total, s.passed, s.failed, s.broken, s.skipped);
+            ')"
+          else
+            total=0; passed=0; failed=0; broken=0; skipped=0
+          fi
+
+          verdict="✅ all green"
+          if [ "${{ needs.test.result }}" != "success" ]; then
+            verdict="❌ failures — see the report"
+          fi
+
+          {
+            echo "## End-to-end run — $verdict"
+            echo ""
+            echo "### 📊 [Open the Allure report]($url)"
+            echo ""
+            echo "| Total | Passed | Failed | Broken | Skipped |"
+            echo "|------:|-------:|-------:|-------:|--------:|"
+            echo "| $total | $passed | $failed | $broken | $skipped |"
+            echo ""
+            echo "Commit \`${GITHUB_SHA:0:7}\` on \`${GITHUB_REF_NAME}\` · run [#${GITHUB_RUN_NUMBER}](${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID})"
+            echo ""
+            echo "> The report is republished on every run. For this run's raw data, see the"
+            echo "> \`allure-results\` and \`playwright-report\` artifacts above."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Fail if the suite failed
+        # The report is published first so it is always available, then the
+        # workflow reflects the real result.
+        if: ${{ needs.test.result != 'success' }}
+        run: |
+          echo "The end-to-end suite failed. Report: ${{ steps.deploy.outputs.page_url }}"
+          exit 1

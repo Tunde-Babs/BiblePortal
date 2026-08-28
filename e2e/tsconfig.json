@@ -1,0 +1,18 @@
+{
+  "extends": "../tsconfig.json",
+  "compilerOptions": {
+    // Playwright runs the suite through its own transform, so this config
+    // exists for editors and for `npm run e2e:typecheck` rather than for a
+    // build. `types` is reset because the suite is Node-side code and must not
+    // inherit the renderer's `vite/client` ambient types.
+    "types": ["node"],
+    "noEmit": true,
+
+    // Locators and `page.evaluate` callbacks are frequently written with an
+    // unused parameter or a deliberately loose payload shape; failing a
+    // typecheck on those adds noise without catching defects.
+    "noUnusedLocals": false,
+    "noUnusedParameters": false
+  },
+  "include": [".", "../playwright.config.ts"]
+}

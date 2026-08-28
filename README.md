@@ -11,6 +11,7 @@ starts.
 ![Licence](https://img.shields.io/badge/licence-GPL--3.0-blue)
 ![Tests](https://img.shields.io/badge/checks-331%20passing-brightgreen)
 ![Offline](https://img.shields.io/badge/offline-no%20account%2C%20no%20telemetry-informational)
+[![E2E](https://github.com/Tunde-Babs/BiblePortal/actions/workflows/e2e.yml/badge.svg)](https://github.com/Tunde-Babs/BiblePortal/actions/workflows/e2e.yml)
 
 ---
 
@@ -150,11 +151,21 @@ npm test             # typecheck + 331 unit checks + production build
 npm run smoke        # boots the app and drives the live pipeline
 npm run smoke:asr    # speech model load, local ONNX, real audio decode
 npm run bench:asr    # measures cue latency
+npm run e2e          # end-to-end: drives the real app through its interface
+npm run e2e:speech   # end-to-end: Whisper, through a fake capture device
 ```
 
 `npm run verify` validates parsers and services against the actual bundled
 scripture — including that every chapter and verse count in the KJV matches the
 canon exactly, and that no verse is empty.
+
+`npm run e2e` is the end-to-end suite: it launches the real application —
+console, audience output and stage monitor — and drives it the way an operator
+does, asserting on what the room would actually see. Each test gets its own
+isolated instance, so the suite runs in parallel and can run while the app is
+open. It also runs every morning in CI and publishes an
+[Allure](https://allurereport.org/) report. See
+[e2e/README.md](e2e/README.md).
 
 ---
 

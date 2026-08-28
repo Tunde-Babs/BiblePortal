@@ -85,7 +85,13 @@ async function bootstrap() {
   ctx.songs = new SongService(ctx.store);
   ctx.plans = new PlanService(ctx.store);
   ctx.media = new MediaService({ store: ctx.store, mediaDir: path.join(userData, 'media') });
-  ctx.schedules = new ScheduleFileService({ store: ctx.store, documentsDir: app.getPath('documents') });
+  // BP_DOCUMENTS_DIR redirects saved schedules and templates away from the real
+  // Documents folder. The end-to-end suite sets it so a test run cannot write
+  // into the operator's own files; it is unset in normal use.
+  ctx.schedules = new ScheduleFileService({
+    store: ctx.store,
+    documentsDir: process.env.BP_DOCUMENTS_DIR || app.getPath('documents'),
+  });
   ctx.collections = new CollectionService(ctx.store);
   ctx.outputServer = new OutputServer({
     rootDir: () => path.join(__dirname, '..', 'dist'),
