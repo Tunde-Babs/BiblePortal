@@ -87,16 +87,23 @@ export default defineConfig({
   },
 
   projects: [
+    // The two projects select by FILE, not by tag.
+    //
+    // `grep`/`grepInvert` would work for running them, but every test excluded
+    // by a grep is still reported to reporters as skipped. With two projects
+    // that means each one emits the other's tests as skipped, and Allure — which
+    // dedupes by test id and lets the later record win — ends up reporting the
+    // entire suite as skipped and nothing as passed. Selecting by file means the
+    // excluded tests are never loaded, so no phantom results exist.
     {
       name: 'e2e',
-      // The Whisper suite downloads a model and decodes real audio. It is
-      // excluded here and run as its own project so a model-server hiccup can
-      // never redden the functional signal.
-      grepInvert: /@slow/,
+      // The Whisper suite downloads a model. It runs as its own project so a
+      // model-server hiccup can never redden the functional signal.
+      testIgnore: '**/12-speech.spec.ts',
     },
     {
       name: 'speech',
-      grep: /@slow/,
+      testMatch: '**/12-speech.spec.ts',
       timeout: 300_000,
       retries: CI ? 1 : 0,
     },

@@ -8,10 +8,7 @@
 import type { ElectronApplication } from '@playwright/test';
 import path from 'node:path';
 
-import { REPO_ROOT, FIXTURE_DIR } from './paths';
-
-/** Speech fixture fed to the fake capture device; written by global setup. */
-const SPOKEN_AUDIO = path.join(FIXTURE_DIR, 'spoken-reference.wav');
+import { REPO_ROOT } from './paths';
 
 /**
  * Environment for a launched instance.
@@ -52,13 +49,11 @@ export function launchArgs(userDataDir: string): string[] {
     REPO_ROOT,
     `--user-data-dir=${userDataDir}`,
 
-    // Feed the microphone from a file instead of a real device. This is what
-    // lets the speech suite exercise capture, endpointing and Whisper with no
-    // microphone and no quiet room; for every other spec it simply means
-    // getUserMedia can never block on a permission prompt nobody will answer.
+    // Never let getUserMedia reach a real microphone or a permission prompt
+    // nobody is there to answer. The fake device generates a tone, which is all
+    // the suite needs: no test asserts on transcribed audio.
     '--use-fake-device-for-media-stream',
     '--use-fake-ui-for-media-stream',
-    `--use-file-for-fake-audio-capture=${SPOKEN_AUDIO}`,
 
     // An AudioContext created without a user gesture stays suspended, and the
     // capture graph then never runs.

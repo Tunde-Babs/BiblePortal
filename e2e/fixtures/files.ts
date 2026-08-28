@@ -13,9 +13,7 @@
  * Written once by global setup; every spec reads them.
  */
 
-import { mkdir, readFile, writeFile, stat } from 'node:fs/promises';
-import { execFile } from 'node:child_process';
-import { promisify } from 'node:util';
+import { mkdir, writeFile } from 'node:fs/promises';
 import zlib from 'node:zlib';
 import path from 'node:path';
 import { createRequire } from 'node:module';
@@ -23,7 +21,6 @@ import { createRequire } from 'node:module';
 import { FIXTURE_DIR } from './paths';
 
 const require = createRequire(import.meta.url);
-const run = promisify(execFile);
 
 /** Everything the suite can import, by absolute path. */
 export const files = {
@@ -34,8 +31,6 @@ export const files = {
   /** Deliberately awkward name — spaces, '#' and '&' broke media loading once. */
   awkwardMedia: path.join(FIXTURE_DIR, 'loop shot #1 & more.png'),
   deck: path.join(FIXTURE_DIR, 'announcements.pptx'),
-  /** Spoken scripture reference, 16 kHz mono PCM. macOS only. */
-  spokenReference: path.join(FIXTURE_DIR, 'spoken-reference.wav'),
 };
 
 /** What the generated song files contain, so specs can assert without guessing. */
@@ -60,13 +55,9 @@ export const expected = {
     titles: ['Welcome', 'Notices', 'Next Sunday'],
     noteOnFirstSlide: 'Hold this slide until the band is ready.',
   },
-  spoken: {
-    phrase: 'turn with me to romans chapter eight verse twenty eight',
-    reference: 'Romans 8:28',
-  },
 };
 
-export async function buildFixtureFiles(): Promise<{ audio: boolean }> {
+export async function buildFixtureFiles(): Promise<void> {
   await mkdir(FIXTURE_DIR, { recursive: true });
 
   await writeFile(files.chordpro, CHORDPRO, 'utf8');
@@ -78,9 +69,6 @@ export async function buildFixtureFiles(): Promise<{ audio: boolean }> {
   await writeFile(files.awkwardMedia, png);
 
   await writeFile(files.deck, await buildPptx());
-
-  const audio = await buildSpokenAudio();
-  return { audio };
 }
 
 // ------------------------------------------------------------------- songs
@@ -247,79 +235,4 @@ ${bullets.map((b) => `      <a:p><a:r><a:t>${b}</a:t></a:r></a:p>`).join('\n')}
   zip.file('ppt/notesSlides/notesSlide1.xml', notes(expected.deck.noteOnFirstSlide));
 
   return zip.generateAsync({ type: 'nodebuffer' });
-}
-
-// ------------------------------------------------------------------ audio
-
-/**
- * Speech for the Whisper suite, synthesised with macOS `say`.
- *
- * Chromium's fake capture device needs 16-bit PCM, which `LEI16@16000` gives
- * directly — the same rate the app resamples to, so nothing is guessing.
- * Returns false where `say` does not exist; the speech specs skip themselves
- * rather than fail on a platform that cannot produce the input.
- */
-async function buildSpokenAudio(): Promise<boolean> {
-  try {
-    await stat('/usr/bin/say');
-  } catch {
-    return false;
-  }
-
-  try {
-    await run('/usr/bin/say', [
-      '-o', files.spokenReference,
-      '--data-format=LEI16@16000',
-      expected.spoken.phrase,
-    ]);
-    await canonicaliseWav(files.spokenReference);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-/**
- * Rewrite a WAV with only the `fmt ` and `data` chunks.
- *
- * `say` emits a valid file, but pads it with Apple's `JUNK` and `FLLR`
- * alignment chunks. Chromium's fake capture device uses a deliberately minimal
- * WAV parser that rejects those, and then reports the misleading "Failed to
- * read ... as input to the fake device. Try disabling the sandbox with
- * --no-sandbox" — which sends you chasing a permissions problem that does not
- * exist. Stripping the padding is the actual fix.
- */
-async function canonicaliseWav(file: string): Promise<void> {
-  const buf = await readFile(file);
-  if (buf.toString('ascii', 0, 4) !== 'RIFF' || buf.toString('ascii', 8, 12) !== 'WAVE') return;
-
-  let fmt: Buffer | null = null;
-  let data: Buffer | null = null;
-
-  let at = 12;
-  while (at + 8 <= buf.length) {
-    const id = buf.toString('ascii', at, at + 4);
-    const size = buf.readUInt32LE(at + 4);
-    const body = buf.subarray(at + 8, at + 8 + size);
-    if (id === 'fmt ') fmt = body;
-    else if (id === 'data') data = body;
-    // Chunks are word-aligned: an odd size carries a trailing pad byte.
-    at += 8 + size + (size % 2);
-  }
-
-  if (!fmt || !data) return;
-
-  const header = Buffer.alloc(12);
-  header.write('RIFF', 0, 'ascii');
-  header.writeUInt32LE(4 + (8 + fmt.length) + (8 + data.length), 4);
-  header.write('WAVE', 8, 'ascii');
-
-  const chunkOf = (id: string, body: Buffer) => {
-    const head = Buffer.alloc(8);
-    head.write(id, 0, 'ascii');
-    head.writeUInt32LE(body.length, 4);
-    return Buffer.concat([head, body]);
-  };
-
-  await writeFile(file, Buffer.concat([header, chunkOf('fmt ', fmt), chunkOf('data', data)]));
 }

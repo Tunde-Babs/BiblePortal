@@ -74,9 +74,17 @@ test('a verse that does not exist is refused with a usable reason', async ({ app
 test('book-name autocomplete appears while typing', async ({ app }) => {
   await searchField(app).fill('phil');
 
-  const suggestions = app.console.locator('.suggest [role="option"]');
-  await expect(suggestions.first()).toBeVisible();
-  await expect(app.console.locator('.suggest')).toContainText(/Philippians|Philemon/);
+  // One assertion, deliberately, on the option itself.
+  //
+  // The list is transient: it unmounts on blur after a 120 ms timer, and again
+  // whenever a later suggestion fetch comes back empty. Waiting for the list and
+  // *then* asserting on its text leaves a window in which it can disappear
+  // between the two — which is exactly how this test flaked.
+  await expect(
+    app.console
+      .locator('.suggest [role="option"]', { hasText: /Philippians|Philemon/ })
+      .first(),
+  ).toBeVisible();
 });
 
 test('Enter stages the passage into preview without touching the program', async ({ app }) => {

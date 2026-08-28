@@ -55,10 +55,8 @@ export default async function globalSetup() {
   await rm(E2E_TMP, { recursive: true, force: true });
   await mkdir(E2E_TMP, { recursive: true });
 
-  const { audio } = await buildFixtureFiles();
-  console.log(
-    `  · fixture files written${audio ? '' : ' (no `say` on this platform — speech specs will skip)'}`,
-  );
+  await buildFixtureFiles();
+  console.log('  · fixture files written');
 
   console.log('  · building user-data template (seed translations + warm index)…');
   const started = Date.now();
