@@ -123,6 +123,12 @@ jobs:
       - name: Configure Pages
         id: pages
         uses: actions/configure-pages@v5
+        with:
+          # Turn Pages on via the API rather than requiring someone to click
+          # through Settings first. Without this the very first run fails with
+          # "Get Pages site failed ... Error: Not Found", because Pages does not
+          # exist yet and the action will not create it on its own.
+          enablement: true
 
       - name: Download Allure results
         # Tolerant on purpose: if `test` died before running anything there is
