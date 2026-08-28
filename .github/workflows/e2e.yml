@@ -115,20 +115,25 @@ jobs:
           node-version: 22
 
       # Allure 2's generator is a Java program.
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: 21
 
+      # ⚠️ ONE-TIME SETUP: Settings ▸ Pages ▸ Source → GitHub Actions.
+      #
+      # This step fails until that is done, and every step after it is skipped —
+      # including the one that writes the report link onto the run summary.
+      #
+      # `enablement: true` is not a way around it. It was tried and fails with
+      # "Resource not accessible by integration": the `pages: write` permission
+      # below governs *deployments*, not site *creation*, and the default
+      # GITHUB_TOKEN has no rights to create a Pages site. Doing it from the
+      # workflow would need a PAT with admin scope, which is a far worse trade
+      # than one click in Settings.
       - name: Configure Pages
         id: pages
         uses: actions/configure-pages@v5
-        with:
-          # Turn Pages on via the API rather than requiring someone to click
-          # through Settings first. Without this the very first run fails with
-          # "Get Pages site failed ... Error: Not Found", because Pages does not
-          # exist yet and the action will not create it on its own.
-          enablement: true
 
       - name: Download Allure results
         # Tolerant on purpose: if `test` died before running anything there is

@@ -161,5 +161,16 @@ The report is published even when the suite fails — that is precisely when it 
 worth reading — and the workflow then fails afterwards to reflect the real
 result.
 
-**One-time setup:** in *Settings ▸ Pages*, set **Source** to **GitHub Actions**.
-Without it the deploy step fails and no link is produced.
+**One-time setup, and it must be done by hand:** in *Settings ▸ Pages*, set
+**Source** to **GitHub Actions**. Until then the *Configure Pages* step fails
+with `Get Pages site failed ... Not Found`, and every step after it is skipped —
+including the one that writes the report link onto the run summary.
+
+The workflow cannot do this for itself. `actions/configure-pages` accepts
+`enablement: true`, but it fails with `Resource not accessible by integration`:
+the `pages: write` permission covers *deployments*, not site *creation*, and the
+default `GITHUB_TOKEN` has no rights to create a Pages site. Automating it would
+mean storing a PAT with admin scope — a much worse trade than one click.
+
+Note that the suite itself is unaffected: the `test` job passes and uploads its
+`allure-results` and `playwright-report` artifacts either way.
