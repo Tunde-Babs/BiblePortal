@@ -1,0 +1,1 @@
+[{"values":["darwin"],"name":"os"},{"values":["arm64"],"name":"arch"},{"values":["v22.23.1"],"name":"node"},{"values":["33.4.11"],"name":"electron"},{"values":["true"],"name":"ci"},{"values":["a30cb22513c65b49c22a1242a329c4013d170ec8"],"name":"commit"},{"values":["ci/enable-github-pages"],"name":"branch"}]
