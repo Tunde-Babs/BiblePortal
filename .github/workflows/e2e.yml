@@ -23,10 +23,11 @@ concurrency:
   group: e2e-${{ github.ref }}
   cancel-in-progress: false
 
+# The report job pushes the generated site to the gh-pages branch, so it needs
+# write access to contents. No `pages:`/`id-token:` here — publishing goes
+# through the branch rather than an Actions Pages deployment.
 permissions:
   contents: read
-  pages: write
-  id-token: write
 
 jobs:
   test:
@@ -103,9 +104,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
-    environment:
-      name: github-pages
-      url: ${{ steps.deploy.outputs.page_url }}
+    permissions:
+      contents: write
 
     steps:
       - uses: actions/checkout@v4
@@ -115,14 +115,10 @@ jobs:
           node-version: 22
 
       # Allure 2's generator is a Java program.
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: 21
-
-      - name: Configure Pages
-        id: pages
-        uses: actions/configure-pages@v5
 
       - name: Download Allure results
         # Tolerant on purpose: if `test` died before running anything there is
@@ -134,27 +130,29 @@ jobs:
           name: allure-results
           path: allure-results
 
-      - name: Carry over history
-        # Allure's trend graphs come from the previous report's `history`
-        # folder. Pulling it off the live site keeps trends across runs without
-        # needing a branch to stash it in. First run has nothing to fetch.
-        continue-on-error: true
+      - name: Restore history from gh-pages
+        # Allure's trend graphs come from the previous report's `history` folder.
+        # Cloning the published branch is the reliable way to get it — reading it
+        # back over HTTP depends on the live site being up, correctly cached and
+        # serving the paths you expect.
         run: |
-          base="${{ steps.pages.outputs.base_url }}"
-          mkdir -p allure-results/history
-          for file in history.json history-trend.json duration-trend.json \
-                      categories-trend.json retry-trend.json; do
-            curl -fsSL "$base/history/$file" -o "allure-results/history/$file" \
-              && echo "carried over $file" \
-              || echo "no previous $file (first run?)"
-          done
+          if git clone --single-branch --branch gh-pages --depth 1 \
+               "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git" \
+               "$GITHUB_WORKSPACE/gh-pages-prev" 2>/dev/null; then
+            mkdir -p allure-results
+            [ -d "$GITHUB_WORKSPACE/gh-pages-prev/history" ] \
+              && cp -r "$GITHUB_WORKSPACE/gh-pages-prev/history" allure-results/history \
+              && echo "Restored previous Allure history for trends."
+          else
+            echo "No gh-pages branch yet — starting fresh history."
+          fi
 
       - name: Generate report
         run: |
           mkdir -p allure-results
           if [ -z "$(ls -A allure-results 2>/dev/null)" ]; then
             echo "No results — the suite did not get far enough to produce any."
-            # An empty report still deploys, so the link in the summary always
+            # An empty report still publishes, so the link in the summary always
             # resolves to something rather than a 404.
             printf '%s' '{"name":"No results","status":"broken","statusDetails":{"message":"The suite produced no results; see the test job log."},"start":0,"stop":0,"uuid":"00000000-0000-0000-0000-000000000000","historyId":"none","labels":[{"name":"suite","value":"pipeline"}]}' \
               > allure-results/00000000-0000-0000-0000-000000000000-result.json
@@ -162,20 +160,27 @@ jobs:
           npm install --no-save allure-commandline@2.43.0
           npx allure generate allure-results --clean -o allure-report
 
-      - name: Upload Pages artifact
-        uses: actions/upload-pages-artifact@v3
+      - name: Upload report artifact
+        if: always()
+        uses: actions/upload-artifact@v4
         with:
+          name: allure-report
           path: allure-report
+          retention-days: 30
 
-      - name: Deploy to GitHub Pages
-        id: deploy
-        uses: actions/deploy-pages@v4
+      - name: Publish to GitHub Pages
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_branch: gh-pages
+          publish_dir: allure-report
 
       - name: Write run summary
         # This is what puts the report link on the run itself, next to the
         # numbers, so nobody has to dig through job logs to find it.
         run: |
-          url="${{ steps.deploy.outputs.page_url }}"
+          owner=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
+          url="https://${owner}.github.io/${{ github.event.repository.name }}/"
           summary="allure-report/widgets/summary.json"
 
           if [ -f "$summary" ]; then
@@ -203,8 +208,7 @@ jobs:
             echo ""
             echo "Commit \`${GITHUB_SHA:0:7}\` on \`${GITHUB_REF_NAME}\` · run [#${GITHUB_RUN_NUMBER}](${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID})"
             echo ""
-            echo "> The report is republished on every run. For this run's raw data, see the"
-            echo "> \`allure-results\` and \`playwright-report\` artifacts above."
+            echo "_Pages may take a minute to rebuild after this run._"
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Fail if the suite failed
@@ -212,5 +216,5 @@ jobs:
         # workflow reflects the real result.
         if: ${{ needs.test.result != 'success' }}
         run: |
-          echo "The end-to-end suite failed. Report: ${{ steps.deploy.outputs.page_url }}"
+          echo "The end-to-end suite failed. See the Allure report linked in the summary."
           exit 1

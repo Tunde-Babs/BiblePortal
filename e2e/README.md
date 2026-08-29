@@ -161,5 +161,17 @@ The report is published even when the suite fails — that is precisely when it 
 worth reading — and the workflow then fails afterwards to reflect the real
 result.
 
-**One-time setup:** in *Settings ▸ Pages*, set **Source** to **GitHub Actions**.
-Without it the deploy step fails and no link is produced.
+The report is published by pushing the generated site to a **`gh-pages`**
+branch, the same way NationsData does it, and Pages serves that branch. Trends
+carry across runs by cloning the branch and copying its `history/` folder back
+into `allure-results` — more reliable than reading the previous report over
+HTTP, which depends on the live site being up and correctly cached.
+
+**One-time setup:** the first successful run creates the `gh-pages` branch.
+Once it exists, set *Settings ▸ Pages ▸ Source* to **Deploy from a branch**,
+branch **`gh-pages`**, folder **`/ (root)`**. Until that is pointed correctly
+the workflow still succeeds and the report is still pushed — it just is not
+served yet.
+
+Note that the suite itself is unaffected: the `test` job passes and uploads its
+`allure-results` and `playwright-report` artifacts either way.
