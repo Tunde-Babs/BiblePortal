@@ -44,13 +44,18 @@ class SongService {
     return songs;
   }
 
-  /** Create or update a song. Returns the stored record. */
-  async upsert(input) {
-    const songs = await this.all();
+  /**
+   * Build a stored record from caller input.
+   *
+   * Shared by upsert() and addMany() so a song imported in bulk is byte-for-byte
+   * the same shape as one saved singly.
+   *
+   * @param {object} input
+   * @param {object|null} prior the record being replaced, if any
+   */
+  _record(input, prior) {
     const now = new Date().toISOString();
-    const existing = input.id ? songs.findIndex((s) => s.id === input.id) : -1;
-
-    const record = {
+    return {
       id: input.id ?? newId(),
       title: (input.title ?? 'Untitled').trim(),
       author: input.author ?? '',
@@ -67,15 +72,52 @@ class SongService {
       notes: input.notes ?? '',
       // Per-song overrides on the theme; null means "use the theme as-is".
       style: input.style ?? null,
-      createdAt: existing >= 0 ? songs[existing].createdAt : now,
+      createdAt: prior?.createdAt ?? now,
       updatedAt: now,
-      usageCount: existing >= 0 ? songs[existing].usageCount ?? 0 : 0,
-      lastUsedAt: existing >= 0 ? songs[existing].lastUsedAt ?? null : null,
+      usageCount: prior?.usageCount ?? 0,
+      lastUsedAt: prior?.lastUsedAt ?? null,
     };
+  }
+
+  /** Create or update a song. Returns the stored record. */
+  async upsert(input) {
+    const songs = await this.all();
+    const existing = input.id ? songs.findIndex((s) => s.id === input.id) : -1;
+    const record = this._record(input, existing >= 0 ? songs[existing] : null);
 
     if (existing >= 0) songs[existing] = record; else songs.push(record);
     await this.save(songs);
     return record;
+  }
+
+  /**
+   * Add many songs in one save.
+   *
+   * upsert() rewrites and fsyncs the whole library per call, which is fine for
+   * one edit and quadratic for an import: three thousand songs means three
+   * thousand full saves of a document that grows with every one of them. One
+   * read and one atomic save keeps a library migration to seconds, and leaves
+   * nothing half-written if it is interrupted.
+   *
+   * @param {object[]} inputs new songs; existing ids are respected, as in upsert
+   * @returns {Promise<object[]>} the stored records
+   */
+  async addMany(inputs) {
+    if (!inputs?.length) return [];
+    const songs = await this.all();
+    const byId = new Map(songs.map((s, i) => [s.id, i]));
+    const records = [];
+
+    for (const input of inputs) {
+      const at = input.id != null ? byId.get(input.id) : undefined;
+      const record = this._record(input, at != null ? songs[at] : null);
+      if (at != null) songs[at] = record;
+      else { byId.set(record.id, songs.length); songs.push(record); }
+      records.push(record);
+    }
+
+    await this.save(songs);
+    return records;
   }
 
   async remove(id) {
@@ -128,13 +170,34 @@ class SongService {
     return { ok: true, song: saved, format: parsed.format, file: path.basename(filePath) };
   }
 
-  /** Import many files, reporting per-file outcomes rather than failing the batch. */
+  /**
+   * Import many files, reporting per-file outcomes rather than failing the batch.
+   *
+   * Every file is parsed first and the library saved once, so dropping in a
+   * hymnal of a few hundred files does not rewrite the whole document once per
+   * file. A file that fails to parse is reported and skipped; the rest still land.
+   */
   async importFiles(filePaths) {
     const results = [];
+    const parsed = [];
+
     for (const file of filePaths) {
-      try { results.push(await this.importFile(file)); }
-      catch (err) { results.push({ ok: false, file: path.basename(file), error: err.message }); }
+      try {
+        const content = await fsp.readFile(file, 'utf8');
+        const song = format.importSong(content, path.basename(file));
+        parsed.push({ ...song, originalKey: song.key });
+        results.push({ ok: true, format: song.format, file: path.basename(file) });
+      } catch (err) {
+        results.push({ ok: false, file: path.basename(file), error: err.message });
+      }
     }
+
+    const saved = await this.addMany(parsed);
+    // Reattach each stored record to the outcome it came from, so callers can
+    // still file the imports into a collection by id.
+    let i = 0;
+    for (const result of results) if (result.ok) result.song = saved[i++];
+
     return {
       imported: results.filter((r) => r.ok).length,
       failed: results.filter((r) => !r.ok).length,

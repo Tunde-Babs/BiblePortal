@@ -577,10 +577,25 @@ export function SettingsPanel() {
                   <div className="row" style={{ gap: 'var(--sp-2)', marginBottom: 'var(--sp-3)' }}>
                     <span className="chip accent">{profile.info.songs.toLocaleString()} songs</span>
                     <span className="chip">{profile.info.memoMB} MB of lyrics</span>
+                    <span className="chip">{profile.info.format}{profile.info.version ? ` · ${profile.info.version}` : ''}</span>
                   </div>
                   <div className="list-sub" style={{ marginBottom: 'var(--sp-3)' }}>
                     Fields found: {profile.info.fields.join(', ')}
                   </div>
+                  {/*
+                    A profile usually holds more than one library — the live one
+                    plus whatever earlier versions left behind. Naming the ones
+                    passed over lets the operator catch a wrong pick here, rather
+                    than after importing the wrong few thousand songs.
+                  */}
+                  {profile.info.alternatives.length > 0 && (
+                    <div className="list-sub" style={{ marginBottom: 'var(--sp-3)' }}>
+                      Also found, not importing:{' '}
+                      {profile.info.alternatives
+                        .map((a) => `${a.songs.toLocaleString()} songs in ${a.folder} (${a.format})`)
+                        .join('; ')}
+                    </div>
+                  )}
                   <div className="row">
                     <button className="btn primary" onClick={() => void runProfileImport()} disabled={ewBusy}>
                       Import {profile.info.songs.toLocaleString()} songs

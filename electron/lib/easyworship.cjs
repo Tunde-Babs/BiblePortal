@@ -175,6 +175,104 @@ function extractSongs(db) {
 }
 
 /**
+ * Read an EasyWorship 7 profile's song library.
+ *
+ * EW7 splits one song across two SQLite *files* in the same folder rather than
+ * two tables in one: `Songs.db` holds the metadata and `SongWords.db` the RTF
+ * lyrics, joined on the song's rowid. Because they are separate files, the
+ * schedule reader's single-database discovery cannot be pointed at them, so the
+ * join is done here in memory.
+ *
+ * Returns rows shaped like the Paradox reader's, so both generations of profile
+ * feed the same importer.
+ *
+ * @param {string} dataDir folder holding Songs.db and SongWords.db
+ * @returns {Promise<{rows:{Title:string,Author:string,Copyright:string,'Song Number':string,Words:string}[], version:string|null}>}
+ */
+async function readProfileSqlite(dataDir) {
+  const SQL = await engine();
+  const open = async (name) => {
+    const file = path.join(dataDir, name);
+    const buf = await fsp.readFile(file);
+    if (!isSqlite(buf)) throw new Error(`${name} is not a SQLite database.`);
+    return new SQL.Database(buf);
+  };
+
+  const songsDb = await open('Songs.db');
+  let wordsDb = null;
+  try {
+    wordsDb = await open('SongWords.db');
+
+    // Lyrics first, keyed by the id the song table joins on. The whole table is
+    // held at once deliberately: a row-at-a-time correlated lookup across two
+    // in-memory databases costs far more than the few MB this occupies.
+    const words = new Map();
+    const wordCols = columnsOf(wordsDb, 'word');
+    if (!wordCols.length) throw new Error('SongWords.db has no "word" table.');
+    const wordStmt = wordsDb.prepare('SELECT song_id, words FROM word');
+    try {
+      while (wordStmt.step()) {
+        const [id, raw] = wordStmt.get();
+        // sql.js hands back a Uint8Array for the RTF blob column; RTF is
+        // 7-bit ASCII with escapes, so latin1 round-trips it safely.
+        const text = raw instanceof Uint8Array ? Buffer.from(raw).toString('latin1') : String(raw ?? '');
+        words.set(Number(id), text);
+      }
+    } finally { wordStmt.free(); }
+
+    const cols = columnsOf(songsDb, 'song').map((c) => c.lower);
+    const pick = (...names) => names.find((n) => cols.includes(n)) ?? null;
+    const titleCol = pick('title');
+    if (!titleCol) throw new Error('Songs.db has no recognisable song table.');
+    const authorCol = pick('author', 'artist');
+    const copyrightCol = pick('copyright');
+    const ccliCol = pick('reference_number', 'ccli');
+
+    const select = ['rowid'];
+    for (const c of [titleCol, authorCol, copyrightCol, ccliCol]) if (c) select.push(`"${c}"`);
+
+    const rows = [];
+    const songStmt = songsDb.prepare(`SELECT ${select.join(', ')} FROM song ORDER BY rowid`);
+    try {
+      while (songStmt.step()) {
+        const row = songStmt.getAsObject();
+        rows.push({
+          Title: String(row[titleCol] ?? '').trim(),
+          Author: authorCol ? String(row[authorCol] ?? '').trim() : '',
+          Copyright: copyrightCol ? String(row[copyrightCol] ?? '').trim() : '',
+          'Song Number': ccliCol ? String(row[ccliCol] ?? '').trim() : '',
+          Words: words.get(Number(row.rowid)) ?? '',
+        });
+      }
+    } finally { songStmt.free(); }
+
+    return { rows, version: await readVersion(dataDir) };
+  } finally {
+    songsDb.close();
+    wordsDb?.close();
+  }
+}
+
+/** Count an EW7 library without decoding any lyrics — for the confirm step. */
+async function countProfileSqlite(dataDir) {
+  const SQL = await engine();
+  const buf = await fsp.readFile(path.join(dataDir, 'Songs.db'));
+  if (!isSqlite(buf)) throw new Error('Songs.db is not a SQLite database.');
+  const db = new SQL.Database(buf);
+  try {
+    if (!columnsOf(db, 'song').length) throw new Error('Songs.db has no "song" table.');
+    const res = db.exec('SELECT COUNT(*) FROM song');
+    return Number(res[0]?.values?.[0]?.[0] ?? 0);
+  } finally { db.close(); }
+}
+
+/** EasyWorship stamps the writing version into `version.dat` beside the tables. */
+async function readVersion(dataDir) {
+  const raw = await fsp.readFile(path.join(dataDir, 'version.dat'), 'utf8').catch(() => '');
+  return raw.split(/\r?\n/).map((l) => l.trim()).find(Boolean) ?? null;
+}
+
+/**
  * Size beyond which a schedule is read entry-by-entry rather than whole.
  *
  * Node caps a Buffer at 4 GB and the V8 heap sits just above that, so holding a
@@ -316,5 +414,6 @@ async function streamEntryToFile(filePath, entry, dest, onProgress = null) {
 module.exports = {
   readEwsx, readEwsxFile, extractMedia, streamEntryToFile, checkSize,
   rtfToText, toSections, isSqlite, isFirebird,
+  readProfileSqlite, countProfileSqlite, readVersion,
   LARGE_FILE_BYTES, MAX_BUFFERABLE_BYTES,
 };

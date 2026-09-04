@@ -16,6 +16,16 @@ const paradox = require('../lib/paradox.cjs');
 const { rtfToText } = require('../lib/rtf.cjs');
 const songFormat = require('../lib/song-format.cjs');
 
+/**
+ * Folders holding a discarded copy of a library rather than a usable one.
+ *
+ * Only the timestamped Paradox rebuild archives qualify. Notably `v6.1` and
+ * `v6.11` do *not*: those look like version archives but are where EasyWorship
+ * 7 keeps its live SQLite library, so skipping them hides the very thing a
+ * migrating church is trying to import.
+ */
+const ARCHIVE_DIR = /^(oldData|Rebuild Backup|Backup\b)/i;
+
 class EasyWorshipImportService {
   /**
    * @param {{ songs:import('./songs.cjs').SongService,
@@ -153,78 +163,177 @@ class EasyWorshipImportService {
   }
 
   /**
-   * Locate the song table inside an EasyWorship profile folder.
+   * Find every song library inside a profile folder, and rank them.
    *
-   * A profile can be handed over in several shapes — the profile root, its
-   * "… Data" folder, or the Databases folder itself — so accept any of them
-   * rather than making the operator find the exact directory.
+   * A profile is not one library. EasyWorship keeps the Paradox tables it grew
+   * up on beside the SQLite ones it migrated to, and adds a `v6.x` snapshot for
+   * each version it has passed through — so a single export routinely holds
+   * three, of two different formats, only one of which is current.
+   *
+   * Matching on the filename `Songs.db` alone therefore picks a superseded
+   * library as readily as the live one, and picks it from the wrong format
+   * about as often. Every candidate is opened and identified here instead, and
+   * the one holding the most songs wins: a church migrating wants its whole
+   * library, and the archives are by definition subsets of it.
+   *
+   * @returns {Promise<{found:object[], rejected:{dir:string,reason:string}[]}>}
    */
-  async findSongTable(dir) {
-    const candidates = [
-      path.join(dir, 'Databases', 'Data', 'Songs.DB'),
-      path.join(dir, 'Data', 'Songs.DB'),
-      path.join(dir, 'Songs.DB'),
-    ];
-    for (const candidate of candidates) {
-      try { await fsp.access(candidate); return candidate; } catch { /* keep looking */ }
+  async _scanSongLibraries(dir) {
+    const found = [];
+    const rejected = [];
+    const seen = new Set();
+
+    /** Identify one folder holding a `Songs.db`/`Songs.DB`, whatever its generation. */
+    const classify = async (dataDir, file) => {
+      if (seen.has(dataDir)) return;
+      seen.add(dataDir);
+
+      // EW7: metadata and lyrics in sibling SQLite files.
+      const words = path.join(dataDir, 'SongWords.db');
+      if (await fsp.access(words).then(() => true, () => false)) {
+        try {
+          const songs = await ew.countProfileSqlite(dataDir);
+          const lyrics = await fsp.stat(words).then((st) => st.size, () => 0);
+          found.push({ kind: 'ew7', dir: dataDir, file, songs, version: await ew.readVersion(dataDir), memoBytes: lyrics });
+          return;
+        } catch (err) { rejected.push({ dir: dataDir, reason: err.message }); return; }
+      }
+
+      // EW2009 and earlier: a Paradox table with lyrics in a sibling .MB file.
+      try {
+        const info = await paradox.inspect(file);
+        found.push({ kind: 'paradox', dir: dataDir, file, songs: info.records, version: await ew.readVersion(dataDir), memoBytes: info.memoBytes });
+      } catch (err) { rejected.push({ dir: dataDir, reason: err.message }); }
+    };
+
+    // Breadth-first, so a shallow library is seen before a nested archive even
+    // when both are readable and the tie has to be broken on song count.
+    let frontier = [dir];
+    let visited = 0;
+    let depth = 0;
+    while (frontier.length && visited < 2000 && depth < 8) {
+      const next = [];
+      for (const current of frontier) {
+        if (visited++ >= 2000) break;
+        let entries;
+        try { entries = await fsp.readdir(current, { withFileTypes: true }); } catch { continue; }
+        for (const entry of entries) {
+          const full = path.join(current, entry.name);
+          if (entry.isFile() && /^songs\.db$/i.test(entry.name)) await classify(current, full);
+          else if (entry.isDirectory() && !ARCHIVE_DIR.test(entry.name)) next.push(full);
+        }
+      }
+      frontier = next;
+      depth++;
     }
 
-    // Fall back to a bounded search, so a slightly different layout still works.
-    const stack = [dir];
-    let visited = 0;
-    while (stack.length && visited < 400) {
-      const current = stack.pop();
-      visited++;
-      let entries;
-      try { entries = await fsp.readdir(current, { withFileTypes: true }); } catch { continue; }
-      for (const entry of entries) {
-        const full = path.join(current, entry.name);
-        if (entry.isFile() && /^songs\.db$/i.test(entry.name)) return full;
-        // Skip the timestamped archives of superseded data.
-        if (entry.isDirectory() && !/^oldData/i.test(entry.name)) stack.push(full);
-      }
+    // Most songs first. A version snapshot never holds more than the library it
+    // was taken from, so this picks the live one without trusting folder names.
+    found.sort((a, b) => b.songs - a.songs);
+    return { found, rejected };
+  }
+
+  /**
+   * The song library to import from, or an error explaining what was found.
+   *
+   * Both callers need the same answer and the same failure message, so the
+   * choice is made once here rather than duplicated.
+   */
+  async resolveSongLibrary(dir) {
+    const { found, rejected } = await this._scanSongLibraries(dir);
+    const best = found.find((c) => c.songs > 0) ?? found[0];
+    if (best) return { ...best, alternatives: found.filter((c) => c !== best) };
+
+    if (rejected.length) {
+      throw new Error(
+        `Found ${rejected.length} song database(s) here, but none could be read: `
+        + `${rejected[0].reason} Choose the EasyWorship profile folder — the one containing "Databases".`,
+      );
     }
-    return null;
+    throw new Error('No song library found. Choose the EasyWorship profile folder — the one containing "Databases".');
+  }
+
+  /**
+   * Path of the song table to import from.
+   * @deprecated superseded by resolveSongLibrary; kept for callers wanting a path.
+   */
+  async findSongTable(dir) {
+    const { found } = await this._scanSongLibraries(dir);
+    return found.find((c) => c.songs > 0)?.file ?? found[0]?.file ?? null;
   }
 
   /** Read a profile's song library without importing, so the UI can confirm. */
   async inspectProfile(dir) {
-    const table = await this.findSongTable(dir);
-    if (!table) {
-      throw new Error('No song library found. Choose the EasyWorship profile folder — the one containing "Databases".');
-    }
-    const info = await paradox.inspect(table);
+    const lib = await this.resolveSongLibrary(dir);
+
+    const fields = lib.kind === 'ew7'
+      ? ['title', 'author', 'copyright', 'reference_number', 'words']
+      : (await paradox.inspect(lib.file)).fields
+        .filter((f) => /title|author|copyright|words|number/i.test(f.name))
+        .map((f) => f.name);
+
     return {
       ok: true,
-      table,
+      table: lib.file,
       folder: path.basename(dir),
-      songs: info.records,
-      memoMB: Math.round(info.memoBytes / 1048576),
-      fields: info.fields.filter((f) => /title|author|copyright|words|number/i.test(f.name)).map((f) => f.name),
+      songs: lib.songs,
+      memoMB: Math.round(lib.memoBytes / 1048576),
+      fields,
+      // Which of the profile's libraries this is, so the operator can tell an
+      // 1,800-song archive from the 3,000-song library they actually use.
+      format: lib.kind === 'ew7' ? 'EasyWorship 7 (SQLite)' : 'EasyWorship 2009 (Paradox)',
+      version: lib.version,
+      // The ones passed over, named so a wrong pick is visible before importing.
+      // Capped: a long-lived profile accumulates a snapshot per upgrade, and a
+      // confirm step listing a dozen of them stops being readable.
+      alternatives: lib.alternatives.slice(0, 4).map((c) => ({
+        songs: c.songs,
+        format: c.kind === 'ew7' ? 'EasyWorship 7 (SQLite)' : 'EasyWorship 2009 (Paradox)',
+        folder: path.relative(dir, c.dir) || '.',
+      })),
     };
   }
 
   /**
-   * Import a whole EasyWorship song library from its Paradox tables.
+   * Import a whole EasyWorship song library.
+   *
+   * Both generations of profile are read into the same row shape — Paradox
+   * tables for EasyWorship 2009, paired SQLite files for 7 — so only the read
+   * differs and everything after it is shared.
    *
    * Lyrics are stored as RTF, so each is decoded and then split into stanzas on
    * blank lines — the same rule the editor uses, so an imported song is
    * indistinguishable from one written here.
    */
   async importProfile(dir, opts = {}, onProgress = null) {
-    const table = await this.findSongTable(dir);
-    if (!table) {
-      throw new Error('No song library found. Choose the EasyWorship profile folder — the one containing "Databases".');
-    }
+    const lib = await this.resolveSongLibrary(dir);
+    const limit = opts.limit ?? Infinity;
 
-    const { rows } = await paradox.readTable(table, {
-      limit: opts.limit ?? Infinity,
-      onProgress: (done, total) => onProgress?.({ stage: 'read', done, total }),
-    });
+    let rows;
+    if (lib.kind === 'ew7') {
+      onProgress?.({ stage: 'read', done: 0, total: lib.songs });
+      ({ rows } = await ew.readProfileSqlite(lib.dir));
+      if (rows.length > limit) rows = rows.slice(0, limit);
+      onProgress?.({ stage: 'read', done: rows.length, total: rows.length });
+    } else {
+      ({ rows } = await paradox.readTable(lib.file, {
+        limit,
+        onProgress: (done, total) => onProgress?.({ stage: 'read', done, total }),
+      }));
+    }
 
     const existing = await this.songs.all();
     const seen = new Set(existing.map((s) => s.title.trim().toLowerCase()));
     const result = { total: rows.length, imported: 0, skipped: 0, empty: 0, errors: [] };
+
+    /**
+     * Built up in memory and saved once at the end.
+     *
+     * Calling upsert() per song rewrites and fsyncs the entire library each
+     * time, so a 3,000-song profile costs three thousand full saves of a
+     * document that is growing as it goes — quadratic, and minutes of it.
+     */
+    const additions = [];
 
     for (const [i, row] of rows.entries()) {
       const title = String(row.Title ?? '').trim();
@@ -241,7 +350,7 @@ class EasyWorshipImportService {
         const sections = songFormat.splitStanzas(words);
         if (!sections.length) { result.empty++; continue; }
 
-        await this.songs.upsert({
+        additions.push({
           title,
           author: String(row.Author ?? '').trim(),
           copyright: String(row.Copyright ?? '').trim(),
@@ -259,7 +368,8 @@ class EasyWorshipImportService {
       if (i % 25 === 0) onProgress?.({ stage: 'import', done: i, total: rows.length });
     }
 
-    return { ok: true, ...result };
+    if (additions.length) await this.songs.addMany(additions);
+    return { ok: true, ...result, format: lib.kind, songsRead: rows.length };
   }
 
   /**

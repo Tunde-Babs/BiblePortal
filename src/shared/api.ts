@@ -437,6 +437,12 @@ export interface EwProfile {
   songs: number;
   memoMB: number;
   fields: string[];
+  /** Which generation of library this is — a profile often holds more than one. */
+  format: string;
+  /** EasyWorship's own version stamp, where the profile records one. */
+  version: string | null;
+  /** The other libraries found in the same profile and passed over. */
+  alternatives: { songs: number; format: string; folder: string }[];
 }
 
 export interface EwProfileImport {

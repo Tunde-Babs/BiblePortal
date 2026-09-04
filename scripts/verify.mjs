@@ -1306,6 +1306,145 @@ check('trailing NUL and space padding is trimmed from text fields', () => {
   eq(header.fields.reduce((n, f) => n + f.size, 0), 40);
 });
 
+describe('Choosing which library to import from an EasyWorship profile');
+
+/**
+ * A profile folder as EasyWorship actually leaves one: the Paradox library it
+ * grew up on, plus the SQLite library it migrated to, plus a snapshot per
+ * version upgrade. Only one of these is the live library, and it is not the
+ * shallowest, the first alphabetically, or the one a filename match finds first.
+ */
+async function buildProfileFixture(root, { liveSongs = 6, snapshotSongs = 3, paradoxRecords = 2 } = {}) {
+  const initSqlJs = (await import('sql.js')).default;
+  const wasm = fs.readFileSync(path.join(path.dirname(fileURLToPath(import.meta.resolve('sql.js'))), 'sql-wasm.wasm'));
+  const SQL = await initSqlJs({ wasmBinary: wasm });
+
+  /** Write an EW7 pair — metadata and lyrics live in separate files. */
+  const writeEw7 = (dir, count, version) => {
+    fs.mkdirSync(dir, { recursive: true });
+    const songs = new SQL.Database();
+    songs.run('CREATE TABLE song (song_uid TEXT, title TEXT, author TEXT, copyright TEXT, reference_number TEXT)');
+    const words = new SQL.Database();
+    words.run('CREATE TABLE word (song_id INTEGER, words TEXT)');
+    for (let i = 1; i <= count; i++) {
+      songs.run('INSERT INTO song VALUES (?,?,?,?,?)', [`u${i}`, `Song ${version} ${i}`, 'Writer', '© Someone', `${1000 + i}`]);
+      words.run('INSERT INTO word VALUES (?,?)', [i, String.raw`{\rtf1\ansi Line one\par Line two\par\par Second stanza\par}`]);
+    }
+    fs.writeFileSync(path.join(dir, 'Songs.db'), Buffer.from(songs.export()));
+    fs.writeFileSync(path.join(dir, 'SongWords.db'), Buffer.from(words.export()));
+    fs.writeFileSync(path.join(dir, 'version.dat'), `${version}\n`);
+    songs.close(); words.close();
+  };
+
+  // The live EasyWorship 7 library, buried two levels down in a folder whose
+  // name reads like an archive.
+  writeEw7(path.join(root, 'Data', 'v6.1', 'Databases', 'Data'), liveSongs, '7.4.1.3');
+  // A snapshot of an earlier version, deeper still.
+  writeEw7(path.join(root, 'Data', 'v6.1', 'Databases', 'Archive', '2020.01.01 (v6.7)'), snapshotSongs, '6.7.10.0');
+  // The Paradox library it migrated from, sitting shallower than both.
+  const px = path.join(root, 'Data', 'Databases', 'Data');
+  fs.mkdirSync(px, { recursive: true });
+  fs.writeFileSync(path.join(px, 'Songs.DB'), buildParadoxFixture({ records: paradoxRecords }));
+  // A genuine discard, holding more songs than the live library so that failing
+  // to skip it would visibly win the ranking.
+  const dead = path.join(root, 'Data', 'Databases', 'oldData v2009 01-Jan-2019');
+  fs.mkdirSync(dead, { recursive: true });
+  fs.writeFileSync(path.join(dead, 'Songs.DB'), buildParadoxFixture({ records: 20 }));
+}
+
+/** A service wired to a scratch store, for the profile checks below. */
+function profileService(name) {
+  const store = new Store(path.join(TMP, name));
+  const songs = new SongService(store);
+  return { songs, ew: new EasyWorshipImportService({ songs, collections: new CollectionService(store), store }) };
+}
+
+await checkAsync('picks the live library, not a version snapshot or a superseded format', async () => {
+  const root = path.join(TMP, 'ewprofile');
+  await buildProfileFixture(root);
+  const { ew } = profileService('ewprof1');
+  const info = await ew.inspectProfile(root);
+  eq(info.songs, 6, 'the fullest library is the live one');
+  eq(info.format, 'EasyWorship 7 (SQLite)');
+  eq(info.version, '7.4.1.3');
+});
+
+await checkAsync('finds the same library from any folder the operator might pick', async () => {
+  const root = path.join(TMP, 'ewprofile');
+  const { ew } = profileService('ewprof2');
+  // The profile root, its data folder, and the folder holding Databases: all
+  // shapes a church hands over, and all must resolve to one answer.
+  for (const dir of [root, path.join(root, 'Data'), path.join(root, 'Data', 'v6.1')]) {
+    const info = await ew.inspectProfile(dir);
+    if (info.songs !== 6) return false;
+  }
+  return true;
+});
+
+await checkAsync('never returns a database it cannot actually read', async () => {
+  // A Songs.db that is neither Paradox nor a usable EW7 pair. Matching on the
+  // filename alone would hand this back and fail deep inside the reader.
+  const root = path.join(TMP, 'ewbogus');
+  const dir = path.join(root, 'Databases', 'Data');
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, 'Songs.db'), Buffer.alloc(4096, 0xAB));
+  const { ew } = profileService('ewprof3');
+  eq(await ew.findSongTable(root), null, 'an unreadable database must not be offered');
+  try { await ew.inspectProfile(root); return false; }
+  catch (err) { return /none could be read/i.test(err.message); }
+});
+
+await checkAsync('reports the libraries it passed over', async () => {
+  const root = path.join(TMP, 'ewprofile');
+  const { ew } = profileService('ewprof4');
+  const info = await ew.inspectProfile(root);
+  const counts = info.alternatives.map((a) => a.songs).sort((a, b) => b - a);
+  eq(counts, [3, 2], 'the snapshot and the Paradox library should both be named');
+  eq(info.alternatives.some((a) => /oldData/.test(a.folder)), false, 'a discarded library must not be offered');
+});
+
+await checkAsync('imports an EasyWorship 7 library, joining lyrics to their song', async () => {
+  const root = path.join(TMP, 'ewprofile');
+  const { songs, ew } = profileService('ewprof5');
+  const res = await ew.importProfile(root);
+  eq(res.imported, 6);
+  const all = await songs.all();
+  eq(all.length, 6);
+  // The RTF must be decoded and split, not stored raw.
+  const first = all[0];
+  eq(first.sections.length, 2, 'a blank line separates stanzas');
+  eq(first.sections[0].body, 'Line one\nLine two');
+  eq(first.notes, 'Imported from EasyWorship');
+});
+
+await checkAsync('re-importing a profile does not duplicate the library', async () => {
+  const root = path.join(TMP, 'ewprofile');
+  const { songs, ew } = profileService('ewprof6');
+  await ew.importProfile(root);
+  const again = await ew.importProfile(root);
+  eq(again.imported, 0);
+  eq((await songs.all()).length, 6, 'a second run must add nothing');
+});
+
+await checkAsync('a bulk import writes the library once, not once per song', async () => {
+  const store = new Store(path.join(TMP, 'bulkwrite'));
+  const songs = new SongService(store);
+  let commits = 0;
+  const realWrite = store.write.bind(store);
+  store.write = (name, value) => { if (name === 'songs') commits++; return realWrite(name, value); };
+
+  const many = Array.from({ length: 50 }, (_, i) => ({
+    title: `Bulk ${i}`,
+    sections: [{ id: `s${i}`, label: 'Verse 1', type: 'verse', number: 1, body: 'Words' }],
+  }));
+  const saved = await songs.addMany(many);
+  eq(commits, 1, 'fifty songs should cost one save, not fifty');
+  eq(saved.length, 50);
+  eq((await songs.all()).length, 50);
+  // Records must be indistinguishable from ones saved singly.
+  eq(Object.keys(saved[0]).sort(), Object.keys(await songs.upsert({ title: 'Single' })).sort());
+});
+
 describe('Finding a song to add to a plan');
 await checkAsync('search finds a song by title, author and by a line in it', async () => {
   const store = new Store(path.join(TMP, 'pick1'));
