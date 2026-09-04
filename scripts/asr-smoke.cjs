@@ -27,9 +27,13 @@ app.whenReady().then(async () => {
   if (win.webContents.isLoading()) await new Promise((r) => win.webContents.once('did-finish-load', r));
 
   // Surface worker/network failures that would otherwise be silent.
+  //
+  // Electron 36 replaced this event's positional arguments with a single event
+  // object, and the numeric level with a string. The old form still fires but
+  // warns that it is going away, so read the object.
   const consoleErrors = [];
-  win.webContents.on('console-message', (_e, level, message) => {
-    if (level >= 2) consoleErrors.push(message);
+  win.webContents.on('console-message', (event) => {
+    if (event.level === 'warning' || event.level === 'error') consoleErrors.push(event.message);
   });
 
   const run = (expr) => win.webContents.executeJavaScript(`(async () => { ${expr} })()`, true);
