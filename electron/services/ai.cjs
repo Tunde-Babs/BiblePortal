@@ -67,14 +67,29 @@ class AIService {
     this.settings = settings;
     /** Rolling transcript window used by live detection. */
     this.window = '';
-    /** Labels already cued, so the same verse isn't fired twice in a row. */
-    this.recent = [];
+    /**
+     * Labels already cued, against the moment each fired.
+     *
+     * Suppression used to be a plain list of the last six, which meant a verse
+     * could not fire again until six *other* references had. A preacher who
+     * returns to their text after twenty minutes of exposition — which is the
+     * normal shape of a sermon — got nothing.
+     */
+    this.recent = new Map();
   }
+
+  /**
+   * How long a cued reference stays suppressed.
+   *
+   * Long enough that a verse under active discussion does not re-cue every time
+   * it is named, short enough that returning to it later in the message works.
+   */
+  static RECENT_MS = 3 * 60_000;
 
   // ------------------------------------------------------------- live detect
 
   /** Reset detection state — call when transcription starts or stops. */
-  resetDetection() { this.window = ''; this.recent = []; }
+  resetDetection() { this.window = ''; this.recent = new Map(); }
 
   /**
    * Feed a transcript chunk and get anything worth cueing.
@@ -94,13 +109,29 @@ class AIService {
     const candidates = [];
 
     // 1. Spoken references.
-    for (const hit of spoken.detectReferences(this.window)) {
+    const spokenHits = spoken.detectReferences(this.window);
+    for (const hit of spokenHits) {
       candidates.push({ ...hit, via: 'reference' });
     }
 
     // 2. Quoted scripture — match the tail of the window against the index.
+    //
+    // What the speaker has already been understood to *cite* must not also be
+    // scored as something they *quoted*. "First Peter two one" reduces to the
+    // words "first" and "peter", which are a perfect phrase match for
+    // John 20:4 — "the other disciple did outrun Peter, and came first to the
+    // sepulchre" — and at 0.97 that beat the 1 Peter 2:1 the speaker actually
+    // asked for. So the recognised reference is removed before quotation
+    // matching, and what remains has to stand on its own as a quotation.
+    let residue = spoken.normalise(this.window);
+    for (const hit of spokenHits) residue = residue.split(hit.matched).join(' ');
+
+    // Distinct tokens, not total: repeating a short phrase used to clear a
+    // count-based guard, which is exactly what happens when the same reference
+    // is spoken twice into one window.
     const tail = this.window.split(/\s+/).slice(-18).join(' ');
-    if (tokenize(tail).length >= 4) {
+    const quotable = new Set(tokenize(residue)).size >= 4 && new Set(tokenize(tail)).size >= 4;
+    if (quotable) {
       const res = await this.bible.search(tail, { translation: opts.translation, limit: 5 });
       for (const r of res.results ?? []) {
         const phrase = phraseScore(tail, r.text);
@@ -123,14 +154,17 @@ class AIService {
       if (!prior || c.confidence > prior.confidence) best.set(c.label, c);
     }
 
+    const now = opts.now ?? Date.now();
+    for (const [label, at] of this.recent) {
+      if (now - at >= AIService.RECENT_MS) this.recent.delete(label);
+    }
+
     const fresh = [...best.values()]
       .filter((c) => c.confidence >= sensitivity)
-      .filter((c) => !this.recent.includes(c.label))
+      .filter((c) => !this.recent.has(c.label))
       .sort((a, b) => b.confidence - a.confidence);
 
-    if (fresh.length) {
-      this.recent = [...fresh.map((c) => c.label), ...this.recent].slice(0, 6);
-    }
+    for (const c of fresh) this.recent.set(c.label, now);
 
     // Attach the verse text so the operator can cue without a second round trip.
     const out = [];

@@ -1417,6 +1417,56 @@ await checkAsync('imports an EasyWorship 7 library, joining lyrics to their song
   eq(first.notes, 'Imported from EasyWorship');
 });
 
+await checkAsync('two different songs sharing a title both survive the import', async () => {
+  // A real church library has several songs called "Hallelujah". Keying the
+  // duplicate check on the title alone dropped one of every such pair.
+  const root = path.join(TMP, 'ewsametitle');
+  const dir = path.join(root, 'Databases', 'Data');
+  fs.mkdirSync(dir, { recursive: true });
+
+  const initSqlJs = (await import('sql.js')).default;
+  const wasm = fs.readFileSync(path.join(path.dirname(fileURLToPath(import.meta.resolve('sql.js'))), 'sql-wasm.wasm'));
+  const SQL = await initSqlJs({ wasmBinary: wasm });
+  const songs = new SQL.Database();
+  songs.run('CREATE TABLE song (title TEXT, author TEXT, copyright TEXT, reference_number TEXT)');
+  const words = new SQL.Database();
+  words.run('CREATE TABLE word (song_id INTEGER, words TEXT)');
+
+  const rtf = (line) => String.raw`{\rtf1\ansi ` + line + String.raw`\par}`;
+  // Same title, different words — two songs. Then the first one again, verbatim.
+  const rows = [
+    ['Hallelujah', 'Praise the everlasting King'],
+    ['Hallelujah', 'Your love is amazing steady and unchanging'],
+    ['Hallelujah', 'Praise the everlasting King'],
+  ];
+  rows.forEach(([title, line], i) => {
+    songs.run('INSERT INTO song VALUES (?,?,?,?)', [title, '', '', '']);
+    words.run('INSERT INTO word VALUES (?,?)', [i + 1, rtf(line)]);
+  });
+  fs.writeFileSync(path.join(dir, 'Songs.db'), Buffer.from(songs.export()));
+  fs.writeFileSync(path.join(dir, 'SongWords.db'), Buffer.from(words.export()));
+  songs.close(); words.close();
+
+  const svc = profileService('ewsametitle');
+  const res = await svc.ew.importProfile(root);
+  eq([res.imported, res.skipped], [2, 1], 'the two distinct songs import; the verbatim repeat does not');
+
+  const all = await svc.songs.all();
+  eq(all.length, 2);
+  eq(all.every((x) => x.title === 'Hallelujah'), true, 'both keep their real title');
+  const bodies = all.map((x) => x.sections[0].body).sort();
+  eq(bodies, ['Praise the everlasting King', 'Your love is amazing steady and unchanging']);
+});
+
+await checkAsync('a same-title import is still idempotent on a second run', async () => {
+  const root = path.join(TMP, 'ewsametitle');
+  const svc = profileService('ewsametitle2');
+  await svc.ew.importProfile(root);
+  const again = await svc.ew.importProfile(root);
+  eq(again.imported, 0, 'nothing new on a repeat run');
+  eq((await svc.songs.all()).length, 2, 'the library must not grow');
+});
+
 await checkAsync('re-importing a profile does not duplicate the library', async () => {
   const root = path.join(TMP, 'ewprofile');
   const { songs, ew } = profileService('ewprof6');
@@ -2246,12 +2296,80 @@ if (!hasData) {
     const res = await ai.detect('good morning everyone it is wonderful to see you all here', { translation: 'kjv' });
     eq(res.detections.length, 0);
   });
+  await checkAsync('a spoken reference is not also scored as a quotation', async () => {
+    // "First Peter two one" reduces to the words "first" and "peter", which are
+    // a perfect phrase match for John 20:4 — "the other disciple did outrun
+    // Peter, and came first to the sepulchre". That scored 0.97 and outranked
+    // the 1 Peter 2:1 the speaker actually asked for.
+    ai.resetDetection();
+    const first = await ai.detect('First Peter 2:1', { translation: 'kjv' });
+    eq(first.detections[0]?.label, '1 Peter 2:1');
+
+    // Saying it twice used to concatenate in the window, clear the token-count
+    // guard by sheer repetition, and surface the wrong verse with high
+    // confidence. Nothing false may appear now.
+    const again = await ai.detect('First Peter 2:1', { translation: 'kjv' });
+    eq(again.detections.some((d) => d.label === 'John 20:4'), false, 'a reference must never match itself as a quotation');
+  });
+
+  await checkAsync('ordinal book names resolve however they are transcribed', async () => {
+    // Whisper renders the same spoken words several ways; all must land.
+    for (const [said, expected] of [
+      ['First Peter 2:1', '1 Peter 2:1'],
+      ['1st Peter chapter 2 verse 1', '1 Peter 2:1'],
+      ['first peter two verse one', '1 Peter 2:1'],
+      ['2nd Timothy 3:16', '2 Timothy 3:16'],
+      ['Second Timothy three sixteen', '2 Timothy 3:16'],
+    ]) {
+      ai.resetDetection();
+      const res = await ai.detect(said, { translation: 'kjv' });
+      if (res.detections[0]?.label !== expected) {
+        return `"${said}" gave ${res.detections[0]?.label ?? 'nothing'}, expected ${expected}`;
+      }
+    }
+    return true;
+  });
+
   await checkAsync('does not re-fire the same reference', async () => {
     ai.resetDetection();
     await ai.detect('turn to romans chapter eight verse twenty eight', { translation: 'kjv' });
     const again = await ai.detect('romans chapter eight verse twenty eight', { translation: 'kjv' });
     eq(again.detections.length, 0);
   });
+  await checkAsync('a cued reference can be given again once its suppression lapses', async () => {
+    // A preacher announces their text, expounds it for twenty minutes, then
+    // names it again. Suppression used to be the last six labels regardless of
+    // time, so that second announcement was silently dropped.
+    ai.resetDetection();
+    const t0 = 1_000_000;
+    const first = await ai.detect('turn to first peter chapter two verse one', { translation: 'kjv', now: t0 });
+    eq(first.detections[0]?.label, '1 Peter 2:1');
+
+    // Straight away: still held down, so a verse under discussion is not re-cued.
+    const soon = await ai.detect('first peter two one', { translation: 'kjv', now: t0 + 30_000 });
+    eq(soon.detections.length, 0, 'a verse just cued should stay suppressed');
+
+    // Well past the window: it must be cueable again.
+    ai.window = '';
+    const later = await ai.detect('back to first peter chapter two verse one', {
+      translation: 'kjv', now: t0 + AIService.RECENT_MS + 1000,
+    });
+    eq(later.detections[0]?.label, '1 Peter 2:1', 'the reference should fire again later in the message');
+  });
+
+  await checkAsync('resetDetection clears the history immediately', async () => {
+    ai.resetDetection();
+    const t0 = 2_000_000;
+    await ai.detect('first peter chapter two verse one', { translation: 'kjv', now: t0 });
+    const blocked = await ai.detect('first peter two one', { translation: 'kjv', now: t0 + 1000 });
+    eq(blocked.detections.length, 0);
+
+    // What the panel's Reset button does.
+    ai.resetDetection();
+    const after = await ai.detect('first peter chapter two verse one', { translation: 'kjv', now: t0 + 2000 });
+    eq(after.detections[0]?.label, '1 Peter 2:1', 'reset must make it cueable at once');
+  });
+
   await checkAsync('outline splits a passage into movements', async () => {
     const res = await ai.outline('Psalm 23', { translation: 'kjv' });
     ok(res.ok && res.movements.length >= 2 && res.keyTerms.length > 0);
