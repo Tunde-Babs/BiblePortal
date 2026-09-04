@@ -94,13 +94,29 @@ class AIService {
     const candidates = [];
 
     // 1. Spoken references.
-    for (const hit of spoken.detectReferences(this.window)) {
+    const spokenHits = spoken.detectReferences(this.window);
+    for (const hit of spokenHits) {
       candidates.push({ ...hit, via: 'reference' });
     }
 
     // 2. Quoted scripture — match the tail of the window against the index.
+    //
+    // What the speaker has already been understood to *cite* must not also be
+    // scored as something they *quoted*. "First Peter two one" reduces to the
+    // words "first" and "peter", which are a perfect phrase match for
+    // John 20:4 — "the other disciple did outrun Peter, and came first to the
+    // sepulchre" — and at 0.97 that beat the 1 Peter 2:1 the speaker actually
+    // asked for. So the recognised reference is removed before quotation
+    // matching, and what remains has to stand on its own as a quotation.
+    let residue = spoken.normalise(this.window);
+    for (const hit of spokenHits) residue = residue.split(hit.matched).join(' ');
+
+    // Distinct tokens, not total: repeating a short phrase used to clear a
+    // count-based guard, which is exactly what happens when the same reference
+    // is spoken twice into one window.
     const tail = this.window.split(/\s+/).slice(-18).join(' ');
-    if (tokenize(tail).length >= 4) {
+    const quotable = new Set(tokenize(residue)).size >= 4 && new Set(tokenize(tail)).size >= 4;
+    if (quotable) {
       const res = await this.bible.search(tail, { translation: opts.translation, limit: 5 });
       for (const r of res.results ?? []) {
         const phrase = phraseScore(tail, r.text);

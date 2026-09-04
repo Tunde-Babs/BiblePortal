@@ -2296,6 +2296,40 @@ if (!hasData) {
     const res = await ai.detect('good morning everyone it is wonderful to see you all here', { translation: 'kjv' });
     eq(res.detections.length, 0);
   });
+  await checkAsync('a spoken reference is not also scored as a quotation', async () => {
+    // "First Peter two one" reduces to the words "first" and "peter", which are
+    // a perfect phrase match for John 20:4 — "the other disciple did outrun
+    // Peter, and came first to the sepulchre". That scored 0.97 and outranked
+    // the 1 Peter 2:1 the speaker actually asked for.
+    ai.resetDetection();
+    const first = await ai.detect('First Peter 2:1', { translation: 'kjv' });
+    eq(first.detections[0]?.label, '1 Peter 2:1');
+
+    // Saying it twice used to concatenate in the window, clear the token-count
+    // guard by sheer repetition, and surface the wrong verse with high
+    // confidence. Nothing false may appear now.
+    const again = await ai.detect('First Peter 2:1', { translation: 'kjv' });
+    eq(again.detections.some((d) => d.label === 'John 20:4'), false, 'a reference must never match itself as a quotation');
+  });
+
+  await checkAsync('ordinal book names resolve however they are transcribed', async () => {
+    // Whisper renders the same spoken words several ways; all must land.
+    for (const [said, expected] of [
+      ['First Peter 2:1', '1 Peter 2:1'],
+      ['1st Peter chapter 2 verse 1', '1 Peter 2:1'],
+      ['first peter two verse one', '1 Peter 2:1'],
+      ['2nd Timothy 3:16', '2 Timothy 3:16'],
+      ['Second Timothy three sixteen', '2 Timothy 3:16'],
+    ]) {
+      ai.resetDetection();
+      const res = await ai.detect(said, { translation: 'kjv' });
+      if (res.detections[0]?.label !== expected) {
+        return `"${said}" gave ${res.detections[0]?.label ?? 'nothing'}, expected ${expected}`;
+      }
+    }
+    return true;
+  });
+
   await checkAsync('does not re-fire the same reference', async () => {
     ai.resetDetection();
     await ai.detect('turn to romans chapter eight verse twenty eight', { translation: 'kjv' });
