@@ -72,6 +72,16 @@ export function DetectPanel() {
 
   const asr = useTranscription({ model, onTranscript: handleTranscript });
 
+  /** Forget the engine's cued-reference history, so anything can fire again. */
+  const resetEngine = useCallback(async () => {
+    try {
+      await api.ai.resetDetection();
+      toast('Detection reset — any verse can be cued again', 'success');
+    } catch (err) {
+      toast(err instanceof Error ? err.message : String(err), 'error');
+    }
+  }, [toast]);
+
   const cue = useCallback(async (hit: Detection, take = false) => {
     if (!hit.verses?.length) return;
     const deck = scriptureDeck(hit.label, hit.verses, hit.translationAbbr ?? '', versesPerSlide);
@@ -303,6 +313,15 @@ export function DetectPanel() {
           <div className="row">
             <span className="section-label">Detections</span>
             <div className="panel-head-spacer" />
+            {/*
+              Clear empties this list. Reset also tells the engine to forget what
+              it has already cued — without it a verse cannot fire again until
+              its suppression lapses, which is why naming the same reference
+              twice while testing appears to do nothing.
+            */}
+            <button className="btn sm ghost" onClick={() => void resetEngine()} title="Forget what has already been cued, so any verse can fire again">
+              Reset
+            </button>
             {!!detections.length && (
               <button className="btn sm ghost" onClick={() => setDetections([])}>Clear</button>
             )}

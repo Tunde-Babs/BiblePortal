@@ -2336,6 +2336,40 @@ if (!hasData) {
     const again = await ai.detect('romans chapter eight verse twenty eight', { translation: 'kjv' });
     eq(again.detections.length, 0);
   });
+  await checkAsync('a cued reference can be given again once its suppression lapses', async () => {
+    // A preacher announces their text, expounds it for twenty minutes, then
+    // names it again. Suppression used to be the last six labels regardless of
+    // time, so that second announcement was silently dropped.
+    ai.resetDetection();
+    const t0 = 1_000_000;
+    const first = await ai.detect('turn to first peter chapter two verse one', { translation: 'kjv', now: t0 });
+    eq(first.detections[0]?.label, '1 Peter 2:1');
+
+    // Straight away: still held down, so a verse under discussion is not re-cued.
+    const soon = await ai.detect('first peter two one', { translation: 'kjv', now: t0 + 30_000 });
+    eq(soon.detections.length, 0, 'a verse just cued should stay suppressed');
+
+    // Well past the window: it must be cueable again.
+    ai.window = '';
+    const later = await ai.detect('back to first peter chapter two verse one', {
+      translation: 'kjv', now: t0 + AIService.RECENT_MS + 1000,
+    });
+    eq(later.detections[0]?.label, '1 Peter 2:1', 'the reference should fire again later in the message');
+  });
+
+  await checkAsync('resetDetection clears the history immediately', async () => {
+    ai.resetDetection();
+    const t0 = 2_000_000;
+    await ai.detect('first peter chapter two verse one', { translation: 'kjv', now: t0 });
+    const blocked = await ai.detect('first peter two one', { translation: 'kjv', now: t0 + 1000 });
+    eq(blocked.detections.length, 0);
+
+    // What the panel's Reset button does.
+    ai.resetDetection();
+    const after = await ai.detect('first peter chapter two verse one', { translation: 'kjv', now: t0 + 2000 });
+    eq(after.detections[0]?.label, '1 Peter 2:1', 'reset must make it cueable at once');
+  });
+
   await checkAsync('outline splits a passage into movements', async () => {
     const res = await ai.outline('Psalm 23', { translation: 'kjv' });
     ok(res.ok && res.movements.length >= 2 && res.keyTerms.length > 0);

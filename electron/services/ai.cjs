@@ -67,14 +67,29 @@ class AIService {
     this.settings = settings;
     /** Rolling transcript window used by live detection. */
     this.window = '';
-    /** Labels already cued, so the same verse isn't fired twice in a row. */
-    this.recent = [];
+    /**
+     * Labels already cued, against the moment each fired.
+     *
+     * Suppression used to be a plain list of the last six, which meant a verse
+     * could not fire again until six *other* references had. A preacher who
+     * returns to their text after twenty minutes of exposition — which is the
+     * normal shape of a sermon — got nothing.
+     */
+    this.recent = new Map();
   }
+
+  /**
+   * How long a cued reference stays suppressed.
+   *
+   * Long enough that a verse under active discussion does not re-cue every time
+   * it is named, short enough that returning to it later in the message works.
+   */
+  static RECENT_MS = 3 * 60_000;
 
   // ------------------------------------------------------------- live detect
 
   /** Reset detection state — call when transcription starts or stops. */
-  resetDetection() { this.window = ''; this.recent = []; }
+  resetDetection() { this.window = ''; this.recent = new Map(); }
 
   /**
    * Feed a transcript chunk and get anything worth cueing.
@@ -139,14 +154,17 @@ class AIService {
       if (!prior || c.confidence > prior.confidence) best.set(c.label, c);
     }
 
+    const now = opts.now ?? Date.now();
+    for (const [label, at] of this.recent) {
+      if (now - at >= AIService.RECENT_MS) this.recent.delete(label);
+    }
+
     const fresh = [...best.values()]
       .filter((c) => c.confidence >= sensitivity)
-      .filter((c) => !this.recent.includes(c.label))
+      .filter((c) => !this.recent.has(c.label))
       .sort((a, b) => b.confidence - a.confidence);
 
-    if (fresh.length) {
-      this.recent = [...fresh.map((c) => c.label), ...this.recent].slice(0, 6);
-    }
+    for (const c of fresh) this.recent.set(c.label, now);
 
     // Attach the verse text so the operator can cue without a second round trip.
     const out = [];
