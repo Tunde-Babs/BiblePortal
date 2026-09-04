@@ -26,6 +26,30 @@ const songFormat = require('../lib/song-format.cjs');
  */
 const ARCHIVE_DIR = /^(oldData|Rebuild Backup|Backup\b)/i;
 
+/**
+ * Identity of a song for import purposes: its title *and* its words.
+ *
+ * Title alone is too coarse for a real church library. Several distinct songs
+ * are called "Hallelujah", a chorus often gets filed under the line it opens
+ * with, and one title can cover both an English and a Yoruba setting. Keying on
+ * the title alone silently dropped 310 of one profile's 3,000 songs as
+ * duplicates when they were different songs entirely.
+ *
+ * The hash is taken over the parsed sections rather than the raw RTF, so the
+ * same song read twice yields the same key regardless of how it was formatted.
+ * That is what keeps a repeated import from duplicating a library.
+ */
+function songIdentity(title, sections) {
+  const lyrics = (sections ?? [])
+    .map((section) => String(section.body ?? ''))
+    .join('\n')
+    .toLowerCase()
+    .replace(/\s+/g, ' ')
+    .trim();
+  const digest = crypto.createHash('sha1').update(lyrics).digest('hex');
+  return `${String(title ?? '').trim().toLowerCase()} ${digest}`;
+}
+
 class EasyWorshipImportService {
   /**
    * @param {{ songs:import('./songs.cjs').SongService,
@@ -79,12 +103,23 @@ class EasyWorshipImportService {
 
     if (wantSongs) {
       const existing = await this.songs.all();
-      const seen = new Set(existing.map((s) => s.title.trim().toLowerCase()));
+      const seen = new Set(existing.map((s) => songIdentity(s.title, s.sections)));
+      // Plan items are matched back to songs by title, so a song already in the
+      // library has to stay findable. Without this, re-importing a schedule put
+      // its songs in the running order pointing at nothing.
+      const knownIdByTitle = new Map(existing.map((s) => [s.title.trim().toLowerCase(), s.id]));
 
       for (const song of result.songs) {
-        const key = song.title.trim().toLowerCase();
-        // Re-importing a schedule should not duplicate a library.
-        if (seen.has(key)) { imported.skipped++; continue; }
+        const title = song.title.trim().toLowerCase();
+        // Same rule as a profile import: identical title *and* words is a
+        // duplicate; a shared title alone is not.
+        const key = songIdentity(song.title, song.sections);
+        if (seen.has(key)) {
+          imported.skipped++;
+          const known = knownIdByTitle.get(title);
+          if (known) songIdByTitle.set(title, known);
+          continue;
+        }
         try {
           const saved = await this.songs.upsert({
             title: song.title,
@@ -97,7 +132,7 @@ class EasyWorshipImportService {
             arrangement: song.arrangement,
             notes: 'Imported from EasyWorship',
           });
-          songIdByTitle.set(key, saved.id);
+          songIdByTitle.set(title, saved.id);
           seen.add(key);
           imported.songs++;
         } catch (err) {
@@ -323,7 +358,7 @@ class EasyWorshipImportService {
     }
 
     const existing = await this.songs.all();
-    const seen = new Set(existing.map((s) => s.title.trim().toLowerCase()));
+    const seen = new Set(existing.map((s) => songIdentity(s.title, s.sections)));
     const result = { total: rows.length, imported: 0, skipped: 0, empty: 0, errors: [] };
 
     /**
@@ -339,16 +374,17 @@ class EasyWorshipImportService {
       const title = String(row.Title ?? '').trim();
       if (!title) { result.empty++; continue; }
 
-      const key = title.toLowerCase();
-      // Re-running an import must not duplicate a library.
-      if (seen.has(key)) { result.skipped++; continue; }
-
       const words = rtfToText(String(row.Words ?? ''));
       if (!words.trim()) { result.empty++; continue; }
 
       try {
         const sections = songFormat.splitStanzas(words);
         if (!sections.length) { result.empty++; continue; }
+
+        // Re-running an import must not duplicate a library, but two different
+        // songs sharing a title must both survive — so identity is title+words.
+        const key = songIdentity(title, sections);
+        if (seen.has(key)) { result.skipped++; continue; }
 
         additions.push({
           title,

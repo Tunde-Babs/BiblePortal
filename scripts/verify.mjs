@@ -1417,6 +1417,56 @@ await checkAsync('imports an EasyWorship 7 library, joining lyrics to their song
   eq(first.notes, 'Imported from EasyWorship');
 });
 
+await checkAsync('two different songs sharing a title both survive the import', async () => {
+  // A real church library has several songs called "Hallelujah". Keying the
+  // duplicate check on the title alone dropped one of every such pair.
+  const root = path.join(TMP, 'ewsametitle');
+  const dir = path.join(root, 'Databases', 'Data');
+  fs.mkdirSync(dir, { recursive: true });
+
+  const initSqlJs = (await import('sql.js')).default;
+  const wasm = fs.readFileSync(path.join(path.dirname(fileURLToPath(import.meta.resolve('sql.js'))), 'sql-wasm.wasm'));
+  const SQL = await initSqlJs({ wasmBinary: wasm });
+  const songs = new SQL.Database();
+  songs.run('CREATE TABLE song (title TEXT, author TEXT, copyright TEXT, reference_number TEXT)');
+  const words = new SQL.Database();
+  words.run('CREATE TABLE word (song_id INTEGER, words TEXT)');
+
+  const rtf = (line) => String.raw`{\rtf1\ansi ` + line + String.raw`\par}`;
+  // Same title, different words — two songs. Then the first one again, verbatim.
+  const rows = [
+    ['Hallelujah', 'Praise the everlasting King'],
+    ['Hallelujah', 'Your love is amazing steady and unchanging'],
+    ['Hallelujah', 'Praise the everlasting King'],
+  ];
+  rows.forEach(([title, line], i) => {
+    songs.run('INSERT INTO song VALUES (?,?,?,?)', [title, '', '', '']);
+    words.run('INSERT INTO word VALUES (?,?)', [i + 1, rtf(line)]);
+  });
+  fs.writeFileSync(path.join(dir, 'Songs.db'), Buffer.from(songs.export()));
+  fs.writeFileSync(path.join(dir, 'SongWords.db'), Buffer.from(words.export()));
+  songs.close(); words.close();
+
+  const svc = profileService('ewsametitle');
+  const res = await svc.ew.importProfile(root);
+  eq([res.imported, res.skipped], [2, 1], 'the two distinct songs import; the verbatim repeat does not');
+
+  const all = await svc.songs.all();
+  eq(all.length, 2);
+  eq(all.every((x) => x.title === 'Hallelujah'), true, 'both keep their real title');
+  const bodies = all.map((x) => x.sections[0].body).sort();
+  eq(bodies, ['Praise the everlasting King', 'Your love is amazing steady and unchanging']);
+});
+
+await checkAsync('a same-title import is still idempotent on a second run', async () => {
+  const root = path.join(TMP, 'ewsametitle');
+  const svc = profileService('ewsametitle2');
+  await svc.ew.importProfile(root);
+  const again = await svc.ew.importProfile(root);
+  eq(again.imported, 0, 'nothing new on a repeat run');
+  eq((await svc.songs.all()).length, 2, 'the library must not grow');
+});
+
 await checkAsync('re-importing a profile does not duplicate the library', async () => {
   const root = path.join(TMP, 'ewprofile');
   const { songs, ew } = profileService('ewprof6');
