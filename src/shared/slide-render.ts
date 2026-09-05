@@ -21,7 +21,7 @@ export const FALLBACK_THEME: Theme = {
   backdrops: { default: null, scripture: null, song: null },
   text: {
     fontFamily: "'Inter', system-ui, sans-serif",
-    size: 62, weight: 600, color: '#ffffff', align: 'center',
+    size: 80, autoFit: true, minSize: 34, weight: 600, color: '#ffffff', align: 'center',
     lineHeight: 1.28, shadow: true, uppercase: false, maxWidth: 88,
   },
   reference: { show: true, size: 26, color: '#9db4ff', weight: 500, position: 'bottom', uppercase: true },
@@ -69,30 +69,22 @@ export function backgroundStyle(theme: Theme): CSSProperties {
 }
 
 /**
- * Body type size, in stage pixels.
+ * Opening body type size, in stage pixels.
  *
- * Long passages must shrink or they overflow the screen — the single most
- * common failure in church presentation. The curve is deliberately gentle so
- * consecutive slides don't visibly jump in size mid-passage.
+ * With `autoFit` on this is simply the size the theme asks for. `SlideSurface`
+ * measures the rendered block against the frame and comes *down* from here as
+ * far as it must — so the configured size is a ceiling that short readings
+ * actually get to use.
+ *
+ * Guessing a smaller opening size from a character count was worse than doing
+ * nothing. It could only ever shrink, so a passage it underestimated stayed
+ * small however much room was left on the screen: the longest verse in the
+ * Bible was being set at 59px inside a frame that had space for far more, using
+ * half the height available to it. How a passage wraps depends on the typeface,
+ * the width and where the spaces fall, none of which a character count sees.
  */
-export function bodyFontSize(slide: Slide | null, theme: Theme): number {
-  const base = theme.text.size;
-  if (!slide) return base;
-
-  const chars = slide.lines.join(' ').length;
-  const lines = slide.lines.length;
-
-  // Two independent pressures: total characters, and line count.
-  const charScale = chars <= 120 ? 1
-    : chars <= 200 ? 0.92
-    : chars <= 300 ? 0.82
-    : chars <= 420 ? 0.72
-    : chars <= 600 ? 0.63
-    : 0.55;
-
-  const lineScale = lines <= 4 ? 1 : lines <= 6 ? 0.9 : lines <= 8 ? 0.8 : 0.7;
-
-  return Math.round(base * Math.min(charScale, lineScale));
+export function bodyFontSize(_slide: Slide | null, theme: Theme): number {
+  return theme.text.size;
 }
 
 /**
@@ -139,15 +131,10 @@ function stripUndefined<T extends object>(o: T | null | undefined): Partial<T> {
 }
 
 /**
- * Even an explicit size must not overflow the screen — a long verse at 90px
- * would run off the bottom. Shrink only when it genuinely does not fit.
+ * A song's own size is a ceiling too — the surface measures and reduces from it.
  */
-function fitOverride(slide: Slide | null, size: number): number {
-  if (!slide) return size;
-  const chars = slide.lines.join(' ').length;
-  const lines = slide.lines.length;
-  const pressure = Math.max(chars / 320, lines / 6, 1);
-  return Math.round(size / pressure);
+function fitOverride(_slide: Slide | null, size: number): number {
+  return size;
 }
 
 export function captionStyle(theme: Theme, scale = 1): CSSProperties {

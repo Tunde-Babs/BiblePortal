@@ -224,7 +224,16 @@ export interface Theme {
   };
   text: {
     fontFamily: string;
+    /**
+     * The size to use when the words fit — a ceiling, not a fixed value.
+     * With `autoFit` on, a passage too long for the screen is reduced from
+     * here rather than the whole theme being set small for the worst case.
+     */
     size: number;
+    /** Shrink to fit the screen when a passage is too long for `size`. */
+    autoFit: boolean;
+    /** Never shrink past this, however long the passage. */
+    minSize: number;
     weight: number;
     color: string;
     align: 'left' | 'center' | 'right';

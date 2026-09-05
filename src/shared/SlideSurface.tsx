@@ -6,7 +6,7 @@
  * between them would be a lie to the operator.
  */
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { Deck, Slide, Theme } from './types';
 import { fileUrl } from './file-url';
 import {
@@ -42,12 +42,80 @@ interface Props {
   still?: boolean;
 }
 
+/**
+ * Shrink the words until they fit the frame.
+ *
+ * Sizing scripture by character count cannot work: how a passage wraps depends
+ * on the typeface, the width it is given and where the spaces fall, so a count
+ * shrinks readings that would have fit and still lets others run off the
+ * bottom. This measures the block that was actually laid out and reduces only
+ * as far as it must — which is what makes it safe to set a large base size and
+ * let long passages come down to meet the screen.
+ *
+ * It runs in a layout effect and writes `fontSize` directly, so the correction
+ * lands before the browser paints and the congregation never sees a resize.
+ *
+ * @param minPx floor in stage pixels, before the surface's own scale
+ */
+function useFitToFrame(
+  frameRef: React.RefObject<HTMLDivElement | null>,
+  bodyRef: React.RefObject<HTMLDivElement | null>,
+  { enabled, startPx, minPx, scale, key }:
+  { enabled: boolean; startPx: number; minPx: number; scale: number; key: string },
+) {
+  useLayoutEffect(() => {
+    const frame = frameRef.current;
+    const body = bodyRef.current;
+    if (!frame || !body || startPx <= 0) return;
+
+    let size = startPx;
+    body.style.fontSize = `${size}px`;
+    if (!enabled) return;
+
+    const floor = Math.max(minPx * scale, 1);
+
+    /** Height left for the body once padding and the reference line are taken. */
+    const roomFor = () => {
+      const cs = getComputedStyle(frame);
+      const gap = parseFloat(cs.rowGap || cs.gap || '0') || 0;
+      let room = frame.clientHeight
+        - (parseFloat(cs.paddingTop) || 0)
+        - (parseFloat(cs.paddingBottom) || 0);
+      for (const child of Array.from(frame.children)) {
+        if (child === body) continue;
+        room -= (child as HTMLElement).offsetHeight + gap;
+      }
+      return room;
+    };
+
+    // Wrapping changes as the size changes, so one ratio is an estimate rather
+    // than an answer. A few passes converge; the cap stops any pathological loop.
+    for (let pass = 0; pass < 8; pass += 1) {
+      const room = roomFor();
+      if (room <= 0) break;
+
+      const tooTall = body.scrollHeight > room + 1;
+      const tooWide = body.scrollWidth > body.clientWidth + 1;
+      if (!tooTall && !tooWide) break;
+
+      const ratio = tooTall ? room / body.scrollHeight : 0.94;
+      // Always take a real step, and never overshoot the floor.
+      const next = Math.max(floor, Math.floor(size * Math.min(ratio, 0.97)));
+      if (next >= size) break;
+      size = next;
+      body.style.fontSize = `${size}px`;
+    }
+  }, [frameRef, bodyRef, enabled, startPx, minPx, scale, key]);
+}
+
 export function SlideSurface({
   slide, deck, theme, blackout = false, cleared = false, logo = false,
   showTranslation = true, showSectionLabel = true, showVerseNumbers = false,
   className = '', fill = true, still = false,
 }: Props) {
   const hostRef = useRef<HTMLDivElement>(null);
+  const frameRef = useRef<HTMLDivElement>(null);
+  const bodyRef = useRef<HTMLDivElement>(null);
   const [scale, setScale] = useState(0);
   const active = theme ?? FALLBACK_THEME;
 
@@ -116,6 +184,19 @@ export function SlideSurface({
   // scripture backdrop underneath.
   const backdrop = resolveBackdrop(deck ?? null, active);
   const showBackdrop = !!backdrop && !showMedia && !blackout && !cleared;
+
+  // The size the theme asks for, before measurement trims it to the frame.
+  const startPx = Number.parseFloat(
+    String(bodyStyle(slide, active, scale, deck?.meta?.style).fontSize ?? '0'),
+  );
+  useFitToFrame(frameRef, bodyRef, {
+    enabled: active.text.autoFit !== false,
+    startPx,
+    minPx: active.text.minSize ?? 24,
+    scale,
+    // Re-fit whenever the words, the theme or the frame change.
+    key: `${slide?.id ?? ''}|${slide?.lines.join('\u0001') ?? ''}|${active.id}|${active.text.size}|${active.text.maxWidth}`,
+  });
 
   return (
     <div
@@ -206,12 +287,13 @@ export function SlideSurface({
         )}
 
         {hasContent && !logo && (
-          <div className="slide-frame" style={frameStyle(active, scale)}>
+          <div className="slide-frame" ref={frameRef} style={frameStyle(active, scale)}>
             {slide.outline ? (
               /* Sermon outline: the whole message with the live point emphasised,
                  so the room can see where they are rather than one loose line. */
               <div
                 className="slide-outline"
+                ref={bodyRef}
                 style={{ ...bodyStyle(slide, active, scale, deck?.meta?.style), textAlign: 'left', maxWidth: '80%' }}
                 key={slide.id}
               >
@@ -232,6 +314,7 @@ export function SlideSurface({
             ) : (
               <div
                 className="slide-body"
+                ref={bodyRef}
                 style={bodyStyle(slide, active, scale, deck?.meta?.style)}
                 key={slide.id /* re-key so the transition replays per slide */}
               >

@@ -14,7 +14,10 @@ const DEFAULT_THEME = {
   backdrops: { default: null, scripture: null, song: null },
   text: {
     fontFamily: "'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif",
-    size: 62, weight: 600, color: '#ffffff', align: 'center', lineHeight: 1.28,
+    // Sized for the back row and reduced only when a passage genuinely needs
+    // it, rather than set small so the longest reading happens to fit.
+    size: 80, autoFit: true, minSize: 34,
+    weight: 600, color: '#ffffff', align: 'center', lineHeight: 1.28,
     shadow: true, uppercase: false, maxWidth: 88,
   },
   reference: { show: true, size: 26, color: '#9db4ff', weight: 500, position: 'bottom', uppercase: true },
@@ -125,7 +128,15 @@ class SettingsService {
 
   async get() {
     const stored = await this.store.read(DOC, null);
-    return merge(DEFAULTS, stored);
+    const settings = merge(DEFAULTS, stored);
+    // `themes` is an array, so a stored one replaces the default outright and
+    // never gains fields added in a later version — a theme saved before
+    // `text.autoFit` existed would have been left without it for good, silently
+    // opting that install out of every setting introduced since. Merge each
+    // stored theme back over the default so new keys arrive with their defaults
+    // while everything the user chose is kept.
+    settings.themes = (settings.themes ?? []).map((theme) => merge(DEFAULT_THEME, theme));
+    return settings;
   }
 
   /** Patch one or more sections. Unknown keys are preserved. */

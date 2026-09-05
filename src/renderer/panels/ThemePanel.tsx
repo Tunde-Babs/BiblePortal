@@ -241,11 +241,39 @@ export function ThemePanel() {
             </select>
           </div>
           <div className="field">
-            <span className="field-label">Size — {t.size}px</span>
-            <input type="range" min={30} max={120} value={t.size}
+            <span className="field-label">Size — {t.size}px{t.autoFit !== false && ' at most'}</span>
+            <input type="range" min={30} max={160} value={t.size}
               onChange={(e) => void patch({ text: { ...t, size: Number(e.target.value) } })} />
-            <span className="field-hint">Long passages shrink automatically so they always fit the screen.</span>
+            <span className="field-hint">
+              {t.autoFit !== false
+                ? 'The size used when the words fit. A longer passage is measured against the screen and reduced only as far as it must be.'
+                : 'Every slide uses exactly this size. A long passage will run off the screen.'}
+            </span>
           </div>
+          <div className="switch-row">
+            <div>
+              <div className="switch-label">Shrink long passages to fit</div>
+              <div className="switch-desc">Measures each slide against the screen instead of guessing from its length</div>
+            </div>
+            <button
+              className={`switch ${t.autoFit !== false ? 'on' : ''}`}
+              onClick={() => void patch({ text: { ...t, autoFit: t.autoFit === false } })}
+              aria-pressed={t.autoFit !== false}
+            />
+          </div>
+          {t.autoFit !== false && (
+            <div className="field">
+              <span className="field-label">Never smaller than — {t.minSize ?? 34}px</span>
+              <input
+                type="range" min={16} max={Math.max(16, t.size)} value={Math.min(t.minSize ?? 34, t.size)}
+                onChange={(e) => void patch({ text: { ...t, minSize: Number(e.target.value) } })}
+              />
+              <span className="field-hint">
+                A passage that still will not fit at this size is left to overflow rather than shrunk past reading distance —
+                raise the verses-per-slide setting instead.
+              </span>
+            </div>
+          )}
           <div className="field-row">
             <div className="field">
               <span className="field-label">Weight</span>

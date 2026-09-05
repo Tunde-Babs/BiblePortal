@@ -106,6 +106,86 @@ app.whenReady().then(async () => {
       record('audience surface renders the live verse', false, 'output window not found');
     }
 
+    // ------------------------------------------------- scripture type sizing
+    //
+    // Sizing used to be guessed from a character count, which cannot know how a
+    // passage wraps: short readings came out smaller than the screen allowed and
+    // long ones still overflowed. These measure what was actually laid out.
+    if (outputWin) {
+      /** Stage a reference and report how the audience surface laid it out. */
+      const measure = async (ref, combine = false) => {
+        await run(`
+          const hit = await window.bp.bible.lookup(${JSON.stringify(ref)}, "kjv");
+          const combine = ${JSON.stringify(combine)};
+          const slides = combine
+            // Every verse on one slide — what an operator gets by raising
+            // "verses per scripture slide", and the case that must shrink.
+            ? [{ id: "fit0", kind: "scripture", lines: hit.verses.map((v) => v.text),
+                 verseNumbers: hit.verses.map((v) => v.verse), label: hit.label }]
+            : hit.verses.map((v, i) => ({
+                id: "fit" + i, kind: "scripture",
+                lines: [v.text], verseNumbers: [v.verse], label: hit.label,
+              }));
+          await window.bp.live.preview({ title: hit.label, kind: "scripture", slides, index: 0 });
+          await window.bp.live.take();
+        `);
+        await new Promise((r) => setTimeout(r, 900));
+        return outputWin.webContents.executeJavaScript(`(() => {
+          const frame = document.querySelector(".slide-frame");
+          const body = document.querySelector(".slide-body");
+          if (!frame || !body) return null;
+          const cs = getComputedStyle(frame);
+          const gap = parseFloat(cs.rowGap || cs.gap || "0") || 0;
+          let room = frame.clientHeight - (parseFloat(cs.paddingTop) || 0) - (parseFloat(cs.paddingBottom) || 0);
+          for (const child of frame.children) if (child !== body) room -= child.offsetHeight + gap;
+          // The surface is CSS-scaled from a 1920-wide design, so divide back
+          // out to compare against the size the theme actually asks for.
+          const scale = frame.clientWidth / 1920;
+          return {
+            fontPx: parseFloat(getComputedStyle(body).fontSize),
+            stagePx: parseFloat(getComputedStyle(body).fontSize) / (scale || 1),
+            needed: body.scrollHeight,
+            room,
+            fill: room > 0 ? body.scrollHeight / room : 0,
+          };
+        })()`, true);
+      };
+
+      const themeSize = await run('return (await window.bp.themes.active()).theme.text.size;');
+      const short = await measure('John 11:35');
+      // The longest single verse in the Bible — it should still fit at full size.
+      const longest = await measure('Esther 8:9');
+      // A whole passage forced onto one slide — this genuinely cannot fit.
+      const crowded = await measure('John 3:1-8', true);
+
+      record(
+        'a short verse gets the full size the theme asks for',
+        !!short && Math.abs(short.stagePx - themeSize) <= 2,
+        short ? `${short.stagePx.toFixed(0)}px stage vs theme ${themeSize}px` : 'no measurement',
+      );
+
+      record(
+        'the longest verse in the Bible fits without being shrunk',
+        !!longest && longest.needed <= longest.room + 1 && Math.abs(longest.stagePx - themeSize) <= 2,
+        longest ? `${longest.stagePx.toFixed(0)}px stage, fills ${Math.round(longest.fill * 100)}% of the height` : 'no measurement',
+      );
+
+      record(
+        'a passage that cannot fit is shrunk until it does',
+        !!crowded && crowded.stagePx < themeSize && crowded.needed <= crowded.room + 1,
+        crowded ? `${crowded.stagePx.toFixed(0)}px stage (theme ${themeSize}px), fills ${Math.round(crowded.fill * 100)}% of the height` : 'no measurement',
+      );
+
+      // The point of measuring rather than guessing: reduce only as far as
+      // needed, so the screen is still used. A character-count rule left the
+      // longest verse at half the frame height with room to spare.
+      record(
+        'a shrunk passage still fills the screen',
+        !!crowded && crowded.fill > 0.6,
+        crowded ? `fills ${Math.round(crowded.fill * 100)}% of the height` : 'no measurement',
+      );
+    }
+
     // Regression: a media file whose name contains a space and a '#' used to
     // truncate at the '#' and silently fail to load.
     const trickyMedia = await run(`
