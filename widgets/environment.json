@@ -1,1 +1,1 @@
-[{"values":["darwin"],"name":"os"},{"values":["arm64"],"name":"arch"},{"values":["v22.23.1"],"name":"node"},{"values":["44.2.0"],"name":"electron"},{"values":["true"],"name":"ci"},{"values":["f5ca949a92a3eb19e59c1bcb846b64ea5613999f"],"name":"commit"},{"values":["main"],"name":"branch"}]
+[{"values":["darwin"],"name":"os"},{"values":["arm64"],"name":"arch"},{"values":["v22.23.2"],"name":"node"},{"values":["44.2.0"],"name":"electron"},{"values":["true"],"name":"ci"},{"values":["a7544f6f2f39978cdda8471a3cd68c922baf119b"],"name":"commit"},{"values":["main"],"name":"branch"}]
