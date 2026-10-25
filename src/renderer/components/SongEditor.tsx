@@ -15,6 +15,7 @@ import type { Slide, Song, SongSection, SongStyle } from '../../shared/types';
 import { SlideSurface } from '../../shared/SlideSurface';
 import { useApp } from '../stores/app';
 import { IconPlus, IconTrash, IconChevron, IconClose } from './Icons';
+import { LyricLayoutSelect } from './LyricLayoutSelect';
 
 /** Labels available for a stanza, in the order they usually appear. */
 const LABELS = [
@@ -259,12 +260,14 @@ export function SongEditor({ song, onClose, onSaved }: Props) {
   /** What the active stanza will look like on the screen. */
   const previewDeck = useMemo(() => {
     const maxLines = settings?.presentation.maxLinesPerSlide ?? 4;
-    const lines = (active?.body ?? '')
+    const firstBlock = (active?.body ?? '')
       .replace(/\[[^\]]*\]/g, '')       // chords are not projected
+      .split(/\n\s*\n/).map((b) => b.trim()).find(Boolean) ?? '';
+    const allLines = firstBlock
       .split('\n')
       .map((l) => l.trimEnd())
-      .filter((l) => l.trim())
-      .slice(0, maxLines);
+      .filter((l) => l.trim());
+    const lines = maxLines === 0 ? allLines : allLines.slice(0, maxLines);
 
     const slide: Slide = {
       id: active?.id ?? 'empty',
@@ -577,9 +580,7 @@ export function SongEditor({ song, onClose, onSaved }: Props) {
               <div className="stanza-preview-pane">
                 <div className="row" style={{ marginBottom: 4 }}>
                   <span className="section-label">On screen</span>
-                  <span className="faint" style={{ fontSize: 'var(--fs-xs)' }}>
-                    first {settings?.presentation.maxLinesPerSlide ?? 4} lines
-                  </span>
+                  <LyricLayoutSelect />
                 </div>
                 <div className="stanza-surface">
                   <SlideSurface

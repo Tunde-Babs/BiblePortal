@@ -50,6 +50,40 @@ class LiveState extends EventEmitter {
     return this.set({ preview: { ...emptyDeck(), ...deck, index: deck.index ?? 0 } });
   }
 
+  /**
+   * Refresh any deck staged from `songId` with newly built slides.
+   *
+   * A deck is a snapshot of the words as they stood when the operator staged
+   * it, which is what keeps playback steady while the library is being worked
+   * on. The one case where that snapshot is wrong is an edit to the song
+   * already cued: the operator fixed the typo precisely so the congregation
+   * would stop seeing it. Without this, saving looks like it did nothing — the
+   * library is correct but preview and the screen still show the old words
+   * until the song is staged again by hand.
+   *
+   * Only the song's own fields are refreshed. The background chosen for this
+   * deck and the key it was staged in belong to the operator, not the library.
+   *
+   * @returns {boolean} whether anything was staged from that song
+   */
+  refreshSong(songId, { slides, title, style = null }) {
+    const patch = {};
+    for (const which of ['preview', 'program']) {
+      const deck = this.state[which];
+      if (deck?.kind !== 'song' || deck.meta?.songId !== songId) continue;
+      patch[which] = {
+        ...deck,
+        title: title ?? deck.title,
+        slides,
+        index: carryIndex(deck, slides),
+        meta: { ...deck.meta, style },
+      };
+    }
+    if (!Object.keys(patch).length) return false;
+    this.set(patch);
+    return true;
+  }
+
   /** Commit preview to program — the "take" action. */
   take() {
     return this.set({ program: { ...this.state.preview }, cleared: false, blackout: false });
@@ -110,6 +144,30 @@ class LiveState extends EventEmitter {
     const { program } = this.state;
     return program.slides[program.index + 1] ?? null;
   }
+}
+
+/**
+ * Map a deck position onto rebuilt slides, by stanza rather than slide number.
+ *
+ * Adding a line to the second verse renumbers every slide after it, so keeping
+ * the raw index would silently move the operator. The stanza being sung is
+ * still the stanza being sung, so that is what is carried across, along with
+ * how far into it the operator had got.
+ */
+function carryIndex(deck, slides) {
+  if (!slides.length) return 0;
+  const current = deck.slides[deck.index];
+  if (current?.sectionId) {
+    const within = deck.slides
+      .slice(0, deck.index)
+      .filter((s) => s.sectionId === current.sectionId).length;
+    const same = [];
+    slides.forEach((s, i) => { if (s.sectionId === current.sectionId) same.push(i); });
+    if (same.length) return same[Math.min(within, same.length - 1)];
+  }
+  // The stanza is gone entirely — hold the nearest position rather than
+  // jumping the congregation back to the top of the song.
+  return Math.min(Math.max(deck.index, 0), slides.length - 1);
 }
 
 module.exports = { LiveState, emptyDeck };

@@ -37,11 +37,15 @@ test('scripture, songs and headings are added as cue items', async ({ app }) => 
   await app.console.getByRole('button', { name: '+ Scripture' }).click();
   await app.console.getByPlaceholder(/Reference/).fill('Romans 8:28-30');
   await app.console.getByPlaceholder(/Reference/).press('Enter');
+  // Lookup and persistence finish asynchronously; let this cue finish before
+  // starting the next edit, otherwise the test overlaps two plan saves.
+  await expect(app.console.locator('.plan-row .list-title')).toContainText('Romans 8:28');
+  await expect(app.console.getByPlaceholder(/Reference/)).toBeHidden();
 
   // A heading, to divide the running order.
   await app.console.getByRole('button', { name: '+ Heading' }).click();
-  await app.console.locator('.panel-host input:visible').last().fill('Worship');
-  await app.console.locator('.panel-host input:visible').last().press('Enter');
+  await app.console.getByPlaceholder('Section name — e.g. Praise and Worship').fill('Worship');
+  await app.console.getByPlaceholder('Section name — e.g. Praise and Worship').press('Enter');
 
   await expect.poll(async () => {
     const plans = await app.bp(() => window.bp.plans.all());

@@ -134,6 +134,27 @@ function handle(channel, fn) {
   });
 }
 
+/**
+ * Rebuild the slides of any deck staged from a song that has just been edited,
+ * so a saved correction reaches preview and the screen without the operator
+ * having to stage the song again. See LiveState#refreshSong.
+ */
+async function restageSong(song) {
+  const state = ctx.live.get();
+  const staged = ['preview', 'program'].some(
+    (which) => state[which]?.kind === 'song' && state[which]?.meta?.songId === song.id,
+  );
+  if (!staged) return;
+
+  const settings = await ctx.settings.get();
+  const slides = (await ctx.songs.slides(song.id, {
+    maxLines: settings.presentation?.maxLinesPerSlide ?? 4,
+    includeChords: false,
+  })).map((s) => ({ ...s, caption: s.sectionLabel }));
+
+  ctx.live.refreshSong(song.id, { slides, title: song.title, style: song.style ?? null });
+}
+
 function registerHandlers() {
   // ------------------------------------------------------------------ bible
   handle('bible:manifest', async () => ({ ok: true, ...ctx.bible.manifest, defaultId: ctx.bible.defaultId }));
@@ -200,7 +221,14 @@ function registerHandlers() {
   handle('songs:all', async () => ({ ok: true, songs: await ctx.songs.all() }));
   handle('songs:get', async (id) => ({ ok: true, song: await ctx.songs.get(id) }));
   handle('songs:search', async (q, limit) => ({ ok: true, results: await ctx.songs.search(q, limit) }));
-  handle('songs:upsert', async (song) => ({ ok: true, song: await ctx.songs.upsert(song) }));
+  handle('songs:upsert', async (song) => {
+    const saved = await ctx.songs.upsert(song);
+    await restageSong(saved);
+    // Every window keeps its own copy of the library; an edit in the console
+    // has to reach the others too.
+    ctx.windows.broadcast(EVENTS.LIBRARY_CHANGED, { kind: 'songs' });
+    return { ok: true, song: saved };
+  });
   handle('songs:remove', async (id) => {
     const result = await ctx.songs.remove(id);
     await ctx.collections.purgeSong(id);

@@ -259,6 +259,18 @@ check('splits long sections onto multiple slides', () => {
   const long = songFormat.importSong('[Verse 1]\na\nb\nc\nd\ne\nf\n', 'l.cho');
   eq(songFormat.toSlides(long, { maxLines: 3 }).length, 2);
 });
+check('full-stanza slides keep every line and respect blank-line breaks and arrangement', () => {
+  const song = {
+    sections: [{ id: 'v', label: 'Verse 1', type: 'verse', body: '[G]Alpha\nBeta\nGamma\nDelta\nEpsilon\nZeta\n\nEta\nTheta' }],
+    arrangement: ['v', 'v'],
+  };
+  const slides = songFormat.toSlides(song, { maxLines: 0 });
+  eq(slides.map((s) => s.lines), [
+    ['Alpha', 'Beta', 'Gamma', 'Delta', 'Epsilon', 'Zeta'], ['Eta', 'Theta'],
+    ['Alpha', 'Beta', 'Gamma', 'Delta', 'Epsilon', 'Zeta'], ['Eta', 'Theta'],
+  ]);
+  eq(new Set(slides.map((s) => s.id)).size, 4);
+});
 check('strips chords from presentation slides', () =>
   ok(!songFormat.toSlides(cho, { maxLines: 4 }).some((s) => s.lines.join('').includes('['))));
 
@@ -396,6 +408,89 @@ check('emits on change', () => {
   live.on('change', () => { fired++; });
   live.set({ logo: true });
   eq(fired, 1);
+});
+
+// Editing a song that is already cued has to reach the cue, or saving looks
+// like it did nothing: the library is right and the screen still shows the
+// words the operator just corrected.
+const songSlide = (sectionId, n, text) =>
+  ({ id: `${sectionId}_${n}`, sectionId, sectionLabel: sectionId, lines: [text] });
+
+/** A deck cued from `song_x`, sitting on `index`. */
+function cuedSong(index = 0) {
+  const live = new LiveState();
+  live.loadPreview({
+    kind: 'song',
+    title: 'Old title',
+    slides: [
+      songSlide('v1', 0, 'one'),
+      songSlide('v2', 1, 'two'),
+      songSlide('v2', 2, 'two more'),
+      songSlide('v3', 3, 'three'),
+    ],
+    index,
+    meta: { songId: 'song_x', key: 'G', background: 'clouds.jpg', style: null },
+  });
+  live.take();
+  return live;
+}
+
+check('editing a cued song refreshes preview and program', () => {
+  const live = cuedSong();
+  const slides = [songSlide('v1', 0, 'one, corrected')];
+  eq(live.refreshSong('song_x', { slides, title: 'New title' }), true);
+  eq(live.get().preview.slides[0].lines, ['one, corrected']);
+  eq(live.get().program.slides[0].lines, ['one, corrected'], 'the screen must see it too');
+  eq(live.get().program.title, 'New title');
+});
+check('editing a different song leaves the cue alone', () => {
+  const live = cuedSong();
+  eq(live.refreshSong('song_other', { slides: [], title: 'Nope' }), false);
+  eq(live.get().program.slides.length, 4);
+  eq(live.get().program.title, 'Old title');
+});
+check('a refresh keeps the operator in the same stanza', () => {
+  const live = cuedSong(3);                    // on v3
+  // A line added to v1 splits it in two, pushing every later slide down one.
+  const slides = [
+    songSlide('v1', 0, 'one'), songSlide('v1', 1, 'one and a half'),
+    songSlide('v2', 2, 'two'), songSlide('v2', 3, 'two more'),
+    songSlide('v3', 4, 'three'),
+  ];
+  live.refreshSong('song_x', { slides, title: 'T' });
+  eq(live.get().program.index, 4, 'v3 moved from slide 3 to slide 4');
+});
+check('a refresh keeps the position within a stanza', () => {
+  const live = cuedSong(2);                    // second slide of v2
+  const slides = [
+    songSlide('v1', 0, 'one'),
+    songSlide('v2', 1, 'two'), songSlide('v2', 2, 'two more'),
+    songSlide('v3', 3, 'three'),
+  ];
+  live.refreshSong('song_x', { slides, title: 'T' });
+  eq(live.get().program.index, 2);
+});
+check('a deleted stanza holds the nearest slide', () => {
+  const live = cuedSong(3);                    // on v3, which the edit removes
+  const slides = [songSlide('v1', 0, 'one'), songSlide('v2', 1, 'two')];
+  live.refreshSong('song_x', { slides, title: 'T' });
+  eq(live.get().program.index, 1, 'clamped rather than thrown back to the top');
+});
+check('a refresh keeps the deck background and key', () => {
+  const live = cuedSong();
+  live.refreshSong('song_x', { slides: [songSlide('v1', 0, 'one')], title: 'T', style: { color: '#fff' } });
+  eq(live.get().program.meta, { songId: 'song_x', key: 'G', background: 'clouds.jpg', style: { color: '#fff' } });
+});
+check('a song emptied to nothing does not leave a bad index', () => {
+  const live = cuedSong(3);
+  live.refreshSong('song_x', { slides: [], title: 'T' });
+  eq(live.get().program.index, 0);
+});
+check('a non-song deck is never refreshed', () => {
+  const live = new LiveState();
+  live.loadPreview({ kind: 'scripture', title: 'John 3', slides: [songSlide('v1', 0, 'x')], meta: { songId: 'song_x' } });
+  live.take();
+  eq(live.refreshSong('song_x', { slides: [], title: 'T' }), false);
 });
 
 // ------------------------------------------------------------- data layer

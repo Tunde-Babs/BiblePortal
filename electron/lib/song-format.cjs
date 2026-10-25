@@ -360,6 +360,7 @@ function exportChordPro(song) {
 /**
  * Break a song's sections into presentation slides, respecting `maxLines`.
  * Long sections split at a blank line where possible, otherwise on line count.
+ * A limit of 0 keeps a whole stanza together; blank lines still split slides.
  */
 function toSlides(song, { maxLines = 4, arrangement = null, includeChords = false } = {}) {
   const byId = new Map((song.sections ?? []).map((s) => [s.id, s]));
@@ -372,13 +373,15 @@ function toSlides(song, { maxLines = 4, arrangement = null, includeChords = fals
     const blocks = stripped.split(/\n\s*\n/).map((b) => b.trim()).filter(Boolean);
     for (const block of blocks) {
       const lines = block.split('\n').map((l) => l.trimEnd()).filter((l) => l.trim());
-      for (let i = 0; i < lines.length; i += maxLines) {
+      const limit = maxLines === 0 ? lines.length
+        : Number.isFinite(maxLines) && maxLines >= 1 ? Math.floor(maxLines) : 4;
+      for (let i = 0; i < lines.length; i += limit) {
         slides.push({
           id: `${section.id}_${slides.length}`,
           sectionId: section.id,
           sectionLabel: section.label,
           sectionType: section.type,
-          lines: lines.slice(i, i + maxLines),
+          lines: lines.slice(i, i + limit),
           continued: i > 0,
         });
       }

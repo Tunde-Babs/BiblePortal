@@ -277,6 +277,7 @@ export interface Settings {
     autoSaveSeconds: number;
   };
   presentation: {
+    /** 0 keeps a full lyric stanza on one slide; blank lines still split. */
     maxLinesPerSlide: number;
     versesPerSlide: number;
     showVerseNumbers: boolean;

@@ -10,7 +10,7 @@
  */
 
 import { test, expect } from '../fixtures/app';
-import { seedSongs } from '../fixtures/seed';
+import { seedSongs, songInput } from '../fixtures/seed';
 import { files, expected } from '../fixtures/files';
 
 test.beforeEach(async ({ app }) => {
@@ -109,6 +109,60 @@ test('a song stages into preview and then takes live', async ({ app }) => {
 
   await app.console.locator('.panel-pad').getByRole('button', { name: 'Take' }).click();
   await expect.poll(async () => (await app.live()).program.title).toContain('Blessed Assurance');
+});
+
+test('full stanza shows every lyric line in the editor, preview, on air and audience output', async ({ app }) => {
+  const lines = Array.from({ length: 12 }, (_, i) => `Alpha stanza line ${i + 1}`);
+  await app.bp(async (input) => {
+    await window.bp.songs.upsert(input);
+  }, songInput('Full Stanza Sample', {
+    sections: [{ type: 'verse', number: 1, label: 'Verse 1', body: lines.join('\n') }],
+  }));
+  await app.console.reload();
+  await app.gotoPanel('Songs');
+
+  const row = app.console.locator('.list-row', { hasText: 'Full Stanza Sample' });
+  await row.getByRole('button', { name: 'Edit', exact: true }).click();
+  await app.console.getByRole('combobox', { name: 'Lyric lines per slide' }).selectOption('0');
+  await expect(app.console.locator('.stanza-surface .slide-line')).toHaveText(lines);
+  await app.console.getByRole('button', { name: 'Save', exact: true }).click();
+  await expect(app.console.getByRole('combobox', { name: 'Lyric lines per slide' })).toHaveValue('0');
+  await app.console.locator('.panel-pad').getByRole('button', { name: 'Preview', exact: true }).click();
+
+  const preview = app.console.locator('.pp-deck.preview');
+  await expect(preview.locator('.slide-line')).toHaveText(lines);
+  expect((await app.live()).preview.slides).toHaveLength(1);
+  await app.console.locator('.pp-take-btn').click();
+  await expect(app.console.locator('.pp-deck.program .slide-line')).toHaveText(lines);
+
+  const audience = await app.openDisplay('output');
+  await expect(audience.locator('.slide-line')).toHaveText(lines);
+
+  // Check real geometry: a line in the DOM can still be clipped off screen.
+  for (const surface of [
+    preview, app.console.locator('.pp-deck.program'), audience.locator('.slide-host'),
+  ]) {
+    await expect.poll(async () => surface.locator('.slide-frame').evaluate((frame) => {
+      const bounds = frame.getBoundingClientRect();
+      return Array.from(frame.querySelectorAll('.slide-line')).every((line) => {
+        const rect = line.getBoundingClientRect();
+        return rect.top >= bounds.top - 1 && rect.bottom <= bounds.bottom + 1
+          && rect.left >= bounds.left - 1 && rect.right <= bounds.right + 1;
+      });
+    })).toBe(true);
+  }
+
+  // The saved preference survives reload; fixed-line pagination remains available.
+  await app.console.reload();
+  await app.gotoPanel('Songs');
+  await expect(app.console.getByRole('combobox', { name: 'Lyric lines per slide' })).toHaveValue('0');
+  await app.console.getByRole('combobox', { name: 'Lyric lines per slide' }).selectOption('4');
+  await app.console.locator('.list-row', { hasText: 'Full Stanza Sample' })
+    .getByRole('button', { name: 'Preview', exact: true }).click();
+  await expect(preview.locator('.slide-line')).toHaveText(lines.slice(0, 4));
+  expect((await app.live()).preview.slides).toHaveLength(3);
+  // Staging a different layout does not change the live stanza until Take.
+  await expect(app.console.locator('.pp-deck.program .slide-line')).toHaveText(lines);
 });
 
 test('a song is removed from the library', async ({ app }) => {

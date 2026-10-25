@@ -106,6 +106,11 @@ The song library starts **empty**, and no backgrounds are bundled. Worship
 lyrics are licensed to the local church, usually through CCLI, so BiblePortal
 imports what you already own rather than shipping anyone else's catalogue.
 
+To show an entire verse or chorus on one slide, choose **Full stanza** in the
+song library or the editor's **On screen** control, then preview the song and
+take it live. This preference applies to all songs. Blank lines still start a
+new slide; numbered line limits remain available for shorter slides.
+
 For backgrounds, Pexels, Pixabay and Unsplash are licence-clear for stills;
 MotionWorship and CreationSwap have free worship motion loops.
 

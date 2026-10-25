@@ -13,6 +13,7 @@ import type { CatalogueGroup, TranslationInfo } from '../../shared/types';
 import type { EwInspection, EwProfile, OnlineBible, OnlineConfig } from '../../shared/api';
 import { useApp } from '../stores/app';
 import { IconImport, IconTrash, IconCheck } from '../components/Icons';
+import { LyricLayoutSelect } from '../components/LyricLayoutSelect';
 
 type Tab = 'general' | 'translations' | 'migrate' | 'data';
 
@@ -305,9 +306,9 @@ export function SettingsPanel() {
                   onChange={(e) => void patchSettings({ presentation: { versesPerSlide: Number(e.target.value) } })} />
               </div>
               <div className="field">
-                <span className="field-label">Lyric lines per slide — {p.maxLinesPerSlide}</span>
-                <input type="range" min={2} max={8} value={p.maxLinesPerSlide}
-                  onChange={(e) => void patchSettings({ presentation: { maxLinesPerSlide: Number(e.target.value) } })} />
+                <span className="field-label">Lyric lines per slide</span>
+                <LyricLayoutSelect />
+                <span className="faint">Full stanza keeps all lines together. Blank lines start a new slide. Preview or save the song to apply.</span>
               </div>
               <div className="switch-row">
                 <div><div className="switch-label">Verse numbers</div><div className="switch-desc">Superscript numbers before each verse</div></div>

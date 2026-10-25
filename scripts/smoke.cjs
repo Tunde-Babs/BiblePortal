@@ -301,6 +301,57 @@ app.whenReady().then(async () => {
     const songs = await run('return await window.bp.songs.all();');
     record('song library reachable and empty by default', Array.isArray(songs.songs) && songs.songs.length === 0);
 
+    // Editing a song that is already cued has to reach the cue. Without it the
+    // library is right and the screen still shows the words the operator has
+    // just corrected, which reads as "saving does nothing".
+    const edited = await run(`
+      const made = await window.bp.songs.upsert({
+        title: 'Smoke Song',
+        sections: [
+          { id: 'sec_a', type: 'verse', number: 1, label: 'Verse 1', body: 'the old words' },
+          { id: 'sec_b', type: 'chorus', number: null, label: 'Chorus', body: 'sing it out' },
+        ],
+      });
+      const song = made.song;
+      const built = await window.bp.songs.slides(song.id, { maxLines: 4, includeChords: false });
+      await window.bp.live.preview({
+        kind: 'song',
+        title: song.title,
+        slides: built.slides.map((s) => ({ ...s, caption: s.sectionLabel })),
+        index: 1,
+        meta: { songId: song.id, key: 'G', background: 'keep-me.png' },
+      });
+      await window.bp.live.take();
+
+      // The operator fixes verse 1 — and stages nothing again.
+      await window.bp.songs.upsert({
+        ...song,
+        title: 'Smoke Song (fixed)',
+        sections: [
+          { ...song.sections[0], body: 'the corrected words' },
+          song.sections[1],
+        ],
+      });
+      const { state } = await window.bp.live.get();
+      await window.bp.songs.remove(song.id);
+      await window.bp.live.preview({ kind: 'blank', title: '', slides: [], index: 0, meta: {} });
+      await window.bp.live.take();
+      return {
+        preview: state.preview.slides[0]?.lines?.join(' '),
+        program: state.program.slides[0]?.lines?.join(' '),
+        title: state.program.title,
+        index: state.program.index,
+        background: state.program.meta?.background,
+      };
+    `);
+    record('an edit to a cued song reaches preview without staging it again',
+      edited?.preview === 'the corrected words', edited?.preview);
+    record('the same edit reaches the screen', edited?.program === 'the corrected words', edited?.program);
+    record('a retitled song retitles its deck', edited?.title === 'Smoke Song (fixed)', edited?.title);
+    record('the operator is left on the same stanza', edited?.index === 1, `slide ${edited?.index}`);
+    record('the deck keeps the background it was staged with',
+      edited?.background === 'keep-me.png', edited?.background);
+
     const topical = await run('return await window.bp.ai.topical("peace", { limit: 3 });');
     record('offline AI topical search', (topical.verses?.length ?? 0) > 0, `${topical.verses.length} verses`);
 

@@ -141,11 +141,17 @@ test('auto-take is off by default', async ({ app }) => {
 test('raising sensitivity suppresses a weak detection', async ({ app }) => {
   // A bare book-and-number with no cue phrase is a weak signal by design.
   await detect(app, 'jude verse four');
+  await expect(detections(app).first().locator('.result-ref')).toHaveText('Jude 4');
   const before = await detections(app).count();
 
   await app.bp(() => window.bp.settings.patch({ ai: { detectionSensitivity: 0.95 } }));
   await app.console.reload();
   await app.gotoPanel('Detect');
+
+  // Reloading the renderer does not reset the engine's recent-reference cache.
+  // The second result must be suppressed by sensitivity, rather than history.
+  await app.console.getByRole('button', { name: 'Reset', exact: true }).click();
+  await expect(app.console.getByText('Detection reset — any verse can be cued again', { exact: true })).toBeVisible();
 
   await detect(app, 'jude verse four');
   await expect(emptyNote(app)).toContainText(/Nothing detected yet/);

@@ -14,6 +14,7 @@ import type { Song } from '../../shared/types';
 import { songDeck, useApp } from '../stores/app';
 import { IconSearch, IconImport, IconTrash, IconPlus } from '../components/Icons';
 import { SongEditor } from '../components/SongEditor';
+import { LyricLayoutSelect } from '../components/LyricLayoutSelect';
 
 /** Twelve keys, conventionally spelled — mirrors the transposer in the main process. */
 const KEYS = ['C', 'Db', 'D', 'Eb', 'E', 'F', 'F#', 'G', 'Ab', 'A', 'Bb', 'B'];
@@ -226,6 +227,7 @@ export function SongsPanel() {
             spellCheck={false}
           />
         </div>
+        <LyricLayoutSelect />
       </div>
 
       {pasteOpen && (
